@@ -65,6 +65,8 @@ def versionone_command(client, channel, nick, message, cmd, args):
         return [
             'Usage for versionone (alias v1)',
             '!v1 reload - Reloads metadata from V1 server',
+            '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
+            '!v1 add [task | test] to <ticket-id> ... - Create a new task or test',
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
 
@@ -107,7 +109,7 @@ def versionone_match(client, channel, nick, message, matches):
 
 @match(find_versionone_numbers)
 @command('versionone', aliases=['v1'], help='Interact with VersionOne tickets.'
-         'Usage: helga versionone reload')
+         'Usage: helga versionone reload | (take | [add (task | test) to]) <ticket-id>')
 def versionone(client, channel, nick, message, *args):
     """
     A plugin for showing URLs to VERSIONONE ticket numbers. This is both a set of commands to
