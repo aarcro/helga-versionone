@@ -14,15 +14,15 @@ from helga.util.encodings import to_unicode
 
 
 logger = log.getLogger(__name__)
-VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT'])
+VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG'])
 
 v1 = None
-Story = None
+Workitem = None
 
 
 def reload_v1():
     """Rebuild the V1 metadata, needed after meta data changes in the app"""
-    global v1, Story
+    global v1, Workitem
 
     try:
         v1 = V1Meta(
@@ -30,7 +30,7 @@ def reload_v1():
             username=settings.VERSIONONE_AUTH[0],
             password=settings.VERSIONONE_AUTH[1],
         )
-        Story = v1.Story
+        Workitem = v1.Workitem
     except AttributeError:
         logger.error('VersionOne plugin misconfigured, check your settings')
     return random.choice(ACKS)
@@ -88,7 +88,7 @@ def versionone_full_descriptions(client, channel, numbers):
             'number': s.Number,
             'url': s.url,
         })
-        for s in Story.filter(
+        for s in Workitem.filter(
             # OR join on each number
             '|'.join(["Number='{0}'".format(n) for n in numbers])
         ).select('Name', 'Number')
