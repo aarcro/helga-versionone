@@ -8,5 +8,5 @@ Settings to Add
 
 You'll need these in your settings.py
 
- * __settings.VERSIONONE_URL__ Url to your instance endpoint
- * __settings.VERSIONONE_AUTH__ Two element tuple: (Username, Password)
+ * __VERSIONONE_URL__ Url to your instance endpoint
+ * __VERSIONONE_AUTH__ Two element tuple: (Username, Password)
