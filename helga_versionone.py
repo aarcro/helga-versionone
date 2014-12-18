@@ -1,4 +1,3 @@
-import random
 import re
 
 import smokesignal
@@ -9,7 +8,7 @@ from v1pysdk import V1Meta
 
 from helga import log, settings
 from helga.db import db
-from helga.plugins import command, match, ACKS, ResponseNotReady
+from helga.plugins import command, match, random_ack, ResponseNotReady
 from helga.util.encodings import to_unicode
 
 
@@ -18,11 +17,12 @@ VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG'])
 
 v1 = None
 Workitem = None
+Team = None
 
 
-def reload_v1():
+def reload_v1(client, channel, nick):
     """Rebuild the V1 metadata, needed after meta data changes in the app"""
-    global v1, Workitem
+    global v1, Workitem, Team
 
     try:
         v1 = V1Meta(
@@ -31,14 +31,57 @@ def reload_v1():
             password=settings.VERSIONONE_AUTH[1],
         )
         Workitem = v1.Workitem
+        Team = v1.Team
     except AttributeError:
         logger.error('VersionOne plugin misconfigured, check your settings')
-    return random.choice(ACKS)
+    return random_ack()
+
+
+# TODO This should be async
+def team_command(client, channel, nick, *args):
+    try:
+        subcmd = args[0]
+        args = args[1:]
+    except IndexError:
+        subcmd = 'list'
+
+    # Find the named channel or create new
+    q = {'name': channel}
+    channel_settings = db.v1_channel_settings.find_one(q) or q
+    teams = channel_settings.get('teams', {})
+    # NB: White space is lost in command parsing, hope for the best
+    name = ' '.join(args)
+
+    if subcmd == 'list':
+        return [
+            '{0} {1}'.format(t, u) for t, u in teams.iteritems()
+        ] if teams else 'No teams found for {0}'.format(channel)
+    elif subcmd == 'add':
+        try:
+            team = Team.where(Name=name).first()
+        except IndexError:
+            return 'I\'m sorry {0}, team name "{1}" not found'.format(nick, name)
+        # Manually building a url is lame, but the url property on TeamRooms doesn't work
+        teams[name] = ', '.join([
+            '{0}/TeamRoom.mvc/Show/{1}'.format(settings.VERSIONONE_URL, r.intid) for r in team.Rooms
+        ]) or team.url
+    elif subcmd == 'remove':
+        try:
+            del teams[name]
+        except KeyError:
+            return 'I\'m sorry {0}, team name "{1}" not found for {2}'.format(nick, name, channel)
+    else:
+        return 'No {0}, you can\'t {1}!'.format(nick, subcmd)
+    # If we didn't return by now, save teams back to DB, and ack the user
+    channel_settings['teams'] = teams
+    db.v1_channel_settings.save(channel_settings)
+    return random_ack()
 
 
 @smokesignal.on('signon')
 def init_versionone(*args, **kwargs):
-    reload_v1()
+    # Three require positionals because it's a subcommand
+    reload_v1(None, None, None)
 
 
 def find_versionone_numbers(message):
@@ -65,13 +108,14 @@ def versionone_command(client, channel, nick, message, cmd, args):
         return [
             'Usage for versionone (alias v1)',
             '!v1 reload - Reloads metadata from V1 server',
+            '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
             '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
             '!v1 add [task | test] to <ticket-id> ... - Create a new task or test',
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
 
     try:
-        return COMMAND_MAP[subcmd](*args)
+        return COMMAND_MAP[subcmd](client, channel, nick, *args)
     except KeyError:
         return u'Umm... {0}, Never heard of it?'.format(subcmd)
     except TypeError:
@@ -127,5 +171,6 @@ def versionone(client, channel, nick, message, *args):
 
 COMMAND_MAP = {
     'reload': reload_v1,
+    'team': team_command,
+    'teams': team_command,
 }
-
