@@ -47,10 +47,10 @@ def find_versionone_numbers(message):
     appear in a URL
     """
 
-    pat = r'(^|[\s\W]+)(({0})-\d+)($|[\s\W]+)'.format('|'.join(VERSIONONE_PATTERNS))
+    pat = r'\b(({0})-\d+)\b'.format('|'.join(VERSIONONE_PATTERNS))
     tickets = []
     for ticket in re.findall(pat, message, re.IGNORECASE):
-        tickets.append(ticket[1])
+        tickets.append(ticket[0])
 
     return tickets
 
@@ -82,6 +82,7 @@ def versionone_full_descriptions(client, channel, numbers):
     """
     Meant to be run asynchronously because it uses the network
     """
+
     descriptions = [
         '[{number}] {name} ({url})'.format(**{
             'name': s.Name,
