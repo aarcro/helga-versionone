@@ -20,6 +20,10 @@ Workitem = None
 Team = None
 
 
+class NotFound(Exception):
+    pass
+
+
 def reload_v1(client, channel, nick):
     """Rebuild the V1 metadata, needed after meta data changes in the app"""
     global v1, Workitem, Team
@@ -62,9 +66,9 @@ def team_command(client, channel, nick, *args):
         except IndexError:
             return 'I\'m sorry {0}, team name "{1}" not found'.format(nick, name)
         # Manually building a url is lame, but the url property on TeamRooms doesn't work
-        teams[name] = ', '.join([
+        teams[name] = (team.intid, ', '.join([
             '{0}/TeamRoom.mvc/Show/{1}'.format(settings.VERSIONONE_URL, r.intid) for r in team.Rooms
-        ]) or team.url
+        ]) or team.url)
     elif subcmd == 'remove':
         try:
             del teams[name]
@@ -76,6 +80,57 @@ def team_command(client, channel, nick, *args):
     channel_settings['teams'] = teams
     db.v1_channel_settings.save(channel_settings)
     return random_ack()
+
+
+def _get_review(item):
+    for field in settings.VERSIONONE_CR_FIELDS:
+        try:
+            return getattr(item, field), field
+        except AttributeError:
+            pass
+    # No candidate fields matched, number might not have been a valid type
+    raise NotFound
+
+
+def review_command(client, channel, nick, number, *args):
+    """(review | cr) <issue> [!]<text>
+        With no text, show review link
+        With '!' before text replace link, otherwise append
+    """
+
+    try:
+        w = Workitem.where(Number=number).first()
+    except IndexError:
+        return 'I\'m sorry {0}, item "{1}" not found'.format(nick, number)
+
+    try:
+        link, field = _get_review(w)
+    except NotFound:
+        # No candidate fields matched, number might not have been valid
+        return 'I\'m sorry {0}, item "{1}" doesn\'t support reviews'.format(nick, number)
+
+    if args is ():
+        return '{0} Reviews: {1}'.format(number, link)
+
+    # else append CR
+    change = False
+    new_link = ' '.join(args)
+    if new_link[0] == '!':
+        new_link = new_link[1:]
+        change = True
+    elif new_link not in link:
+        new_link = ' '.join([link, new_link])
+        change = True
+
+    if change:
+        logger.debug('On {0} change {1} to "{2}"'.format(number, field, new_link))
+        if not getattr(settings, 'VERSIONONE_READONLY', True):
+            setattr(w, field, new_link)
+            v1.commit()
+            logger.debug('commited')
+
+        return random_ack()
+    return 'Already got that one {0}'.format(nick)
 
 
 @smokesignal.on('signon')
@@ -173,4 +228,6 @@ COMMAND_MAP = {
     'reload': reload_v1,
     'team': team_command,
     'teams': team_command,
+    'review': review_command,
+    'cr': review_command,
 }

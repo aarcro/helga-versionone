@@ -26,3 +26,5 @@ You'll need these in your settings.py
 
  * __VERSIONONE_URL__ Url to your instance endpoint
  * __VERSIONONE_AUTH__ Two element tuple: (Username, Password)
+ * __VERSIONONE_CR_FIELDS__ List of custom fields that hold codereview links
+ * __VERSIONONE_READONLY__ (Default: True) Set to False to allow writing to V1
