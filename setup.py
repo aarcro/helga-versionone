@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 
-version = '0.1.1'
+version = '0.1.2'
 
 setup(name="helga-versionone",
       version=version,
@@ -22,7 +22,7 @@ setup(name="helga-versionone",
       author='Aaron McMillin',
       author_email='aaron@mcmillinclan.org',
       url='https://github.com/aarcro/helga-versionone',
-      download_url='https://github.com/aarcro/helga-versionone/tarball/0.1.1',
+      download_url='https://github.com/aarcro/helga-versionone/tarball/' + version,
       license='MIT',
       packages=find_packages(),
       py_modules=['helga_versionone'],
