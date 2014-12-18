@@ -143,7 +143,9 @@ def review_command(client, channel, nick, number, *args):
 
     if change:
         logger.debug('On {0} change {1} to "{2}"'.format(number, field, new_link))
-        if not getattr(settings, 'VERSIONONE_READONLY', True):
+        if getattr(settings, 'VERSIONONE_READONLY', True):
+            return 'I would, but I\'m not allowed to write :('
+        else:
             setattr(w, field, new_link)
             v1.commit()
             logger.debug('commited')
