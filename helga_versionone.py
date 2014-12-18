@@ -1,9 +1,8 @@
 import re
+from functools import wraps, partial
 
 import smokesignal
-
-from twisted.internet import reactor
-
+from twisted.internet import reactor, task
 from v1pysdk import V1Meta
 
 from helga import log, settings
@@ -24,6 +23,25 @@ class NotFound(Exception):
     pass
 
 
+def bad_args(client, channel, nick, failure):
+    failure.trap(TypeError)
+    client.msg(channel, u'Umm... {0}, you might want to check the docs for that'.format(nick))
+
+
+def deferred_to_channel(fn):
+    @wraps(fn)
+    def wrapper(client, channel, nick, *args):
+        task.deferLater(
+            reactor, 0, fn, client, channel, nick, *args
+        ).addCallback(
+            partial(client.msg, channel)
+        ).addErrback(
+            partial(bad_args, client, channel, nick)
+        )
+        raise ResponseNotReady
+    return wrapper
+
+
 def reload_v1(client, channel, nick):
     """Rebuild the V1 metadata, needed after meta data changes in the app"""
     global v1, Workitem, Team
@@ -41,7 +59,7 @@ def reload_v1(client, channel, nick):
     return random_ack()
 
 
-# TODO This should be async
+@deferred_to_channel
 def team_command(client, channel, nick, *args):
     try:
         subcmd = args[0]
@@ -57,9 +75,9 @@ def team_command(client, channel, nick, *args):
     name = ' '.join(args)
 
     if subcmd == 'list':
-        return [
+        return '\n'.join([
             '{0} {1}'.format(t, u) for t, u in teams.iteritems()
-        ] if teams else 'No teams found for {0}'.format(channel)
+        ]) if teams else 'No teams found for {0}'.format(channel)
     elif subcmd == 'add':
         try:
             team = Team.where(Name=name).first()
@@ -92,6 +110,7 @@ def _get_review(item):
     raise NotFound
 
 
+@deferred_to_channel
 def review_command(client, channel, nick, number, *args):
     """(review | cr) <issue> [!]<text>
         With no text, show review link
