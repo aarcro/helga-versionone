@@ -50,8 +50,27 @@ def deferred_to_channel(fn):
         ).addErrback(
             partial(quit_now, client, channel, nick)
         )
+        logger.debug('Delaying exection of {0}'.format(fn.__name__))
         raise ResponseNotReady
     return wrapper
+
+
+def commit_changes(*args):
+    """Respect the READONLY setting, return ack, or no perms message
+       args is a list of 3-tuples, that will be passed to setattr iff we will write to V1
+
+       Because of the V1Meta caching, strange things happen if you make changes and don't actually commit
+       So only make the changes when commiting.
+    """
+    if getattr(settings, 'VERSIONONE_READONLY', True):
+        return 'I would, but I\'m not allowed to write :('
+
+    for call in args:
+        setattr(*call)
+
+    v1.commit()
+    logger.debug('commited')
+    return random_ack()
 
 
 def get_user(nick):
@@ -69,24 +88,6 @@ def get_user(nick):
             'I\'m sorry {{nick}}, couldn\'t find {0} in VersionOne as {1}. '
             'Check !v1 alias'.format(o_nick, nick)
         )
-
-
-def reload_v1(client, channel, nick):
-    """Rebuild the V1 metadata, needed after meta data changes in the app"""
-    global v1, Workitem, Team, Member
-
-    try:
-        v1 = V1Meta(
-            instance_url=settings.VERSIONONE_URL,
-            username=settings.VERSIONONE_AUTH[0],
-            password=settings.VERSIONONE_AUTH[1],
-        )
-        Member = v1.Member
-        Team = v1.Team
-        Workitem = v1.Workitem
-    except AttributeError:
-        logger.error('VersionOne plugin misconfigured, check your settings')
-    return random_ack()
 
 
 @deferred_to_channel
@@ -134,44 +135,21 @@ def alias_command(client, channel, nick, *args):
     return random_ack()
 
 
-@deferred_to_channel
-def team_command(client, channel, nick, *args):
+def reload_v1(client, channel, nick):
+    """Rebuild the V1 metadata, needed after meta data changes in the app"""
+    global v1, Workitem, Team, Member
+
     try:
-        subcmd = args[0]
-        args = args[1:]
-    except IndexError:
-        subcmd = 'list'
-
-    # Find the named channel or create new
-    q = {'name': channel}
-    channel_settings = db.v1_channel_settings.find_one(q) or q
-    teams = channel_settings.get('teams', {})
-    # NB: White space is lost in command parsing, hope for the best
-    name = ' '.join(args)
-
-    if subcmd == 'list':
-        return '\n'.join([
-            '{0} {1}'.format(t, u) for t, u in teams.iteritems()
-        ]) if teams else 'No teams found for {0}'.format(channel)
-    elif subcmd == 'add':
-        try:
-            team = Team.where(Name=name).first()
-        except IndexError:
-            return 'I\'m sorry {0}, team name "{1}" not found'.format(nick, name)
-        # Manually building a url is lame, but the url property on TeamRooms doesn't work
-        teams[name] = (team.intid, ', '.join([
-            '{0}/TeamRoom.mvc/Show/{1}'.format(settings.VERSIONONE_URL, r.intid) for r in team.Rooms
-        ]) or team.url)
-    elif subcmd == 'remove':
-        try:
-            del teams[name]
-        except KeyError:
-            return 'I\'m sorry {0}, team name "{1}" not found for {2}'.format(nick, name, channel)
-    else:
-        return 'No {0}, you can\'t {1}!'.format(nick, subcmd)
-    # If we didn't return by now, save teams back to DB, and ack the user
-    channel_settings['teams'] = teams
-    db.v1_channel_settings.save(channel_settings)
+        v1 = V1Meta(
+            instance_url=settings.VERSIONONE_URL,
+            username=settings.VERSIONONE_AUTH[0],
+            password=settings.VERSIONONE_AUTH[1],
+        )
+        Member = v1.Member
+        Team = v1.Team
+        Workitem = v1.Workitem
+    except AttributeError:
+        logger.error('VersionOne plugin misconfigured, check your settings')
     return random_ack()
 
 
@@ -218,21 +196,62 @@ def review_command(client, channel, nick, number, *args):
 
     if change:
         logger.debug('On {0} change {1} to "{2}"'.format(number, field, new_link))
-        if getattr(settings, 'VERSIONONE_READONLY', True):
-            return 'I would, but I\'m not allowed to write :('
-        else:
-            setattr(w, field, new_link)
-            v1.commit()
-            logger.debug('commited')
+        return commit_changes((w, field, new_link),)
 
-        return random_ack()
     return 'Already got that one {0}'.format(nick)
 
 
-@smokesignal.on('signon')
-def init_versionone(*args, **kwargs):
-    # Three require positionals because it's a subcommand
-    reload_v1(None, None, None)
+@deferred_to_channel
+def team_command(client, channel, nick, *args):
+    try:
+        subcmd = args[0]
+        args = args[1:]
+    except IndexError:
+        subcmd = 'list'
+
+    # Find the named channel or create new
+    q = {'name': channel}
+    channel_settings = db.v1_channel_settings.find_one(q) or q
+    teams = channel_settings.get('teams', {})
+    # NB: White space is lost in command parsing, hope for the best
+    name = ' '.join(args)
+
+    if subcmd == 'list':
+        return '\n'.join([
+            '{0} {1}'.format(t, u) for t, u in teams.iteritems()
+        ]) if teams else 'No teams found for {0}'.format(channel)
+    elif subcmd == 'add':
+        try:
+            team = Team.where(Name=name).first()
+        except IndexError:
+            return 'I\'m sorry {0}, team name "{1}" not found'.format(nick, name)
+        # Manually building a url is lame, but the url property on TeamRooms doesn't work
+        teams[name] = (team.intid, ', '.join([
+            '{0}/TeamRoom.mvc/Show/{1}'.format(settings.VERSIONONE_URL, r.intid) for r in team.Rooms
+        ]) or team.url)
+    elif subcmd == 'remove':
+        try:
+            del teams[name]
+        except KeyError:
+            return 'I\'m sorry {0}, team name "{1}" not found for {2}'.format(nick, name, channel)
+    else:
+        return 'No {0}, you can\'t {1}!'.format(nick, subcmd)
+    # If we didn't return by now, save teams back to DB, and ack the user
+    channel_settings['teams'] = teams
+    db.v1_channel_settings.save(channel_settings)
+    return random_ack()
+
+
+@deferred_to_channel
+def take_command(client, channel, nick, number, *args):
+    pass
+
+
+@deferred_to_channel
+def user_command(client, channel, nick, *args):
+    # Recombine space'd args for full name lookup
+    lookup = ' '.join(args) or nick
+    return get_user(lookup).url
 
 
 def find_versionone_numbers(message):
@@ -261,6 +280,8 @@ def versionone_command(client, channel, nick, message, cmd, args):
             '!v1 reload - Reloads metadata from V1 server',
             '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
             '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
+            '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
+            '!v1 add [task | test] to <ticket-id> ... - Create a new task or test',
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
 
@@ -274,7 +295,8 @@ def versionone_command(client, channel, nick, message, cmd, args):
     return None
 
 
-def versionone_full_descriptions(client, channel, numbers):
+@deferred_to_channel
+def versionone_full_descriptions(client, channel, nick, message, matches):
     """
     Meant to be run asynchronously because it uses the network
     """
@@ -287,18 +309,11 @@ def versionone_full_descriptions(client, channel, numbers):
         })
         for s in Workitem.filter(
             # OR join on each number
-            '|'.join(["Number='{0}'".format(n) for n in numbers])
+            '|'.join(["Number='{0}'".format(n) for n in matches])
         ).select('Name', 'Number')
     ]
 
-    if descriptions:
-        client.msg(channel, '\n'.join(descriptions))
-
-
-def versionone_match(client, channel, nick, message, matches):
-    # do the fetching with a deferred
-    reactor.callLater(0, versionone_full_descriptions, client, channel, matches)
-    raise ResponseNotReady
+    return '\n'.join(descriptions)
 
 
 @match(find_versionone_numbers)
@@ -316,23 +331,23 @@ def versionone(client, channel, nick, message, *args):
         fn = versionone_command
     else:
         # args = [matches]
-        fn = versionone_match
+        fn = versionone_full_descriptions
     return fn(client, channel, nick, message, *args)
 
 
-@deferred_to_channel
-def user_command(client, channel, nick, *args):
-    # Recombine space'd args for full name lookup
-    lookup = ' '.join(args) or nick
-    return get_user(lookup).url
+@smokesignal.on('signon')
+def init_versionone(*args, **kwargs):
+    # Three require positionals because it's a subcommand
+    reload_v1(None, None, None)
 
 
 COMMAND_MAP = {
+    'alias': alias_command,
+    'cr': review_command,
     'reload': reload_v1,
+    'review': review_command,
+    'take': take_command,
     'team': team_command,
     'teams': team_command,
-    'review': review_command,
-    'cr': review_command,
     'user': user_command,
-    'alias': alias_command,
 }
