@@ -17,15 +17,25 @@ VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG'])
 v1 = None
 Workitem = None
 Team = None
+Member = None
 
 
 class NotFound(Exception):
     pass
 
 
+class QuitNow(Exception):
+    pass
+
+
 def bad_args(client, channel, nick, failure):
     failure.trap(TypeError)
     client.msg(channel, u'Umm... {0}, you might want to check the docs for that'.format(nick))
+
+
+def quit_now(client, channel, nick, failure):
+    failure.trap(QuitNow)
+    client.msg(channel, failure.value.message.format(channel=channel, nick=nick))
 
 
 def deferred_to_channel(fn):
@@ -37,14 +47,33 @@ def deferred_to_channel(fn):
             partial(client.msg, channel)
         ).addErrback(
             partial(bad_args, client, channel, nick)
+        ).addErrback(
+            partial(quit_now, client, channel, nick)
         )
         raise ResponseNotReady
     return wrapper
 
 
+def get_user(nick):
+    o_nick = nick
+    try:
+        nick = db.v1_user_map.find_one({'irc_nick': nick})['v1_nick']
+    except (TypeError, KeyError):
+        # Lookup failed, no worries
+        pass
+
+    try:
+        return Member.filter("Name='{0}'|Nickname='{0}'|Username='{0}'".format(nick)).first()
+    except IndexError:
+        raise QuitNow(
+            'I\'m sorry {{nick}}, couldn\'t find {0} in VersionOne as {1}. '
+            'Check !v1 alias'.format(o_nick, nick)
+        )
+
+
 def reload_v1(client, channel, nick):
     """Rebuild the V1 metadata, needed after meta data changes in the app"""
-    global v1, Workitem, Team
+    global v1, Workitem, Team, Member
 
     try:
         v1 = V1Meta(
@@ -52,10 +81,56 @@ def reload_v1(client, channel, nick):
             username=settings.VERSIONONE_AUTH[0],
             password=settings.VERSIONONE_AUTH[1],
         )
-        Workitem = v1.Workitem
+        Member = v1.Member
         Team = v1.Team
+        Workitem = v1.Workitem
     except AttributeError:
         logger.error('VersionOne plugin misconfigured, check your settings')
+    return random_ack()
+
+
+@deferred_to_channel
+def alias_command(client, channel, nick, *args):
+    # Populate subcmd, and target to continue
+    target = nick
+    try:
+        subcmd = args[0]
+        args = args[1:]
+    except IndexError:
+        # 0 args lookup nick
+        subcmd = 'lookup'
+    else:
+        # At least 1 arg
+        if args:
+            target = ' '.join(args)
+        else:
+            # Exactly 1 arg - look it up if not a command
+            if subcmd not in ['lookup', 'remove']:
+                target = subcmd
+                subcmd = 'lookup'
+
+    if subcmd == 'lookup':
+        lookup = {'irc_nick': target}
+        try:
+            v1_nick = db.v1_user_map.find_one(lookup)['v1_nick']
+        except (TypeError, KeyError):
+            v1_nick = target
+        return '{0} is known as {1} in V1'.format(target, v1_nick)
+
+    elif subcmd == 'set':
+        lookup = {'irc_nick': nick}
+        alias = db.v1_user_map.find_one(lookup) or lookup
+        alias['v1_nick'] = target
+        db.v1_user_map.save(alias)
+
+    elif subcmd == 'remove':
+        if target:
+            return 'That\'s not nice {0}. You can\'t remove {0}'.format(nick, target)
+        lookup = {'irc_nick': nick}
+        db.v1_user_map.find_and_modify(lookup, remove=True)
+    else:
+        return 'No {0}, you can\'t {1}!'.format(nick, subcmd)
+
     return random_ack()
 
 
@@ -113,8 +188,8 @@ def _get_review(item):
 @deferred_to_channel
 def review_command(client, channel, nick, number, *args):
     """(review | cr) <issue> [!]<text>
-        With no text, show review link
-        With '!' before text replace link, otherwise append
+       With no text, show review link
+       With '!' before text replace link, otherwise append
     """
 
     try:
@@ -184,9 +259,8 @@ def versionone_command(client, channel, nick, message, cmd, args):
         return [
             'Usage for versionone (alias v1)',
             '!v1 reload - Reloads metadata from V1 server',
+            '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
             '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
-            '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
-            '!v1 add [task | test] to <ticket-id> ... - Create a new task or test',
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
 
@@ -229,7 +303,7 @@ def versionone_match(client, channel, nick, message, matches):
 
 @match(find_versionone_numbers)
 @command('versionone', aliases=['v1'], help='Interact with VersionOne tickets.'
-         'Usage: helga versionone reload | (take | [add (task | test) to]) <ticket-id>')
+         'Usage: "!v1" for help')
 def versionone(client, channel, nick, message, *args):
     """
     A plugin for showing URLs to VERSIONONE ticket numbers. This is both a set of commands to
@@ -245,10 +319,20 @@ def versionone(client, channel, nick, message, *args):
         fn = versionone_match
     return fn(client, channel, nick, message, *args)
 
+
+@deferred_to_channel
+def user_command(client, channel, nick, *args):
+    # Recombine space'd args for full name lookup
+    lookup = ' '.join(args) or nick
+    return get_user(lookup).url
+
+
 COMMAND_MAP = {
     'reload': reload_v1,
     'team': team_command,
     'teams': team_command,
     'review': review_command,
     'cr': review_command,
+    'user': user_command,
+    'alias': alias_command,
 }
