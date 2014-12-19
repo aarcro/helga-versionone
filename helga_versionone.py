@@ -82,7 +82,11 @@ def get_user(nick):
         pass
 
     try:
-        return Member.filter("Name='{0}'|Nickname='{0}'|Username='{0}'".format(nick)).first()
+        return Member.filter(
+            "Name='{0}'|Nickname='{0}'|Username='{0}'".format(nick)
+        ).select(
+            'Name', 'Nickname'
+        ).first()
     except IndexError:
         raise QuitNow(
             'I\'m sorry {{nick}}, couldn\'t find {0} in VersionOne as {1}. '
@@ -125,7 +129,7 @@ def alias_command(client, channel, nick, *args):
         db.v1_user_map.save(alias)
 
     elif subcmd == 'remove':
-        if target:
+        if target != nick:
             return 'That\'s not nice {0}. You can\'t remove {0}'.format(nick, target)
         lookup = {'irc_nick': nick}
         db.v1_user_map.find_and_modify(lookup, remove=True)
@@ -251,7 +255,8 @@ def take_command(client, channel, nick, number, *args):
 def user_command(client, channel, nick, *args):
     # Recombine space'd args for full name lookup
     lookup = ' '.join(args) or nick
-    return get_user(lookup).url
+    v1_user = get_user(lookup)
+    return '{0} [{1}] ({2})'.format(v1_user.Name, v1_user.Nickname, v1_user.url)
 
 
 def find_versionone_numbers(message):
