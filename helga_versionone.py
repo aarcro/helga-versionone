@@ -73,6 +73,16 @@ def commit_changes(*args):
     return random_ack()
 
 
+def get_workitem(number, *args):
+    """Get a workitem or die trying.
+       args are passed to select to pre-populate fields
+    """
+    try:
+        return Workitem.where(Number=number).select(*args).first()
+    except IndexError:
+        raise QuitNow('I\'m sorry {{nick}}, item "{0}" not found'.format(number))
+
+
 def get_user(nick):
     o_nick = nick
     try:
@@ -174,10 +184,7 @@ def review_command(client, channel, nick, number, *args):
        With '!' before text replace link, otherwise append
     """
 
-    try:
-        w = Workitem.where(Number=number).first()
-    except IndexError:
-        return 'I\'m sorry {0}, item "{1}" not found'.format(nick, number)
+    w = get_workitem(number)
 
     try:
         link, field = _get_review(w)
@@ -247,16 +254,22 @@ def team_command(client, channel, nick, *args):
 
 
 @deferred_to_channel
-def take_command(client, channel, nick, number, *args):
-    pass
+def take_command(client, channel, nick, number):
+    w = get_workitem(number, 'Owners')
+    user = get_user(nick)
+
+    if user in w.Owners:
+        return 'Dude {0}, you already own it!'.format(nick)
+    # Writing to Owners can only add values
+    return commit_changes((w, 'Owners', [user]))
 
 
 @deferred_to_channel
 def user_command(client, channel, nick, *args):
     # Recombine space'd args for full name lookup
     lookup = ' '.join(args) or nick
-    v1_user = get_user(lookup)
-    return '{0} [{1}] ({2})'.format(v1_user.Name, v1_user.Nickname, v1_user.url)
+    user = get_user(lookup)
+    return '{0} [{1}] ({2})'.format(user.Name, user.Nickname, user.url)
 
 
 def find_versionone_numbers(message):
