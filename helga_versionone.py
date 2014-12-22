@@ -15,9 +15,11 @@ logger = log.getLogger(__name__)
 VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG'])
 
 v1 = None
-Workitem = None
-Team = None
 Member = None
+Task = None
+Team = None
+Test = None
+Workitem = None
 
 
 class NotFound(Exception):
@@ -71,6 +73,26 @@ def commit_changes(*args):
     v1.commit()
     logger.debug('commited')
     return random_ack()
+
+
+def create_object(Klass, **kwargs):
+    """Respect the READONLY setting return the object or raise QuitNow
+       kwargs are passed to Klass.create()
+
+    """
+    if getattr(settings, 'VERSIONONE_READONLY', True):
+        raise QuitNow('I\'m sorry {nick}, write access is disabled')
+
+    return Klass.create(**kwargs)
+
+
+def _get_things(Klass, workitem, *args):
+    if not args:
+        args = ['Name', 'Status.Name', 'Status.Order']
+    return Klass.where(Parent=workitem.idref).select(*args)
+
+get_tasks = partial(_get_things, Task)
+get_tests = partial(_get_things, Test)
 
 
 def get_workitem(number, *args):
@@ -151,7 +173,7 @@ def alias_command(client, channel, nick, *args):
 
 def reload_v1(client, channel, nick):
     """Rebuild the V1 metadata, needed after meta data changes in the app"""
-    global v1, Workitem, Team, Member
+    global Member, Task, Team, Test, Workitem, v1
 
     try:
         v1 = V1Meta(
@@ -159,9 +181,13 @@ def reload_v1(client, channel, nick):
             username=settings.VERSIONONE_AUTH[0],
             password=settings.VERSIONONE_AUTH[1],
         )
+
         Member = v1.Member
+        Task = v1.Task
         Team = v1.Team
+        Test = v1.Test
         Workitem = v1.Workitem
+
     except AttributeError:
         logger.error('VersionOne plugin misconfigured, check your settings')
     return random_ack()
@@ -264,6 +290,44 @@ def take_command(client, channel, nick, number):
     return commit_changes((w, 'Owners', [user]))
 
 
+def _list_or_add_things(Klass, number, action=None, *args):
+    workitem = get_workitem(number)
+    if action is None:
+        things = list(_get_things(Klass, workitem))
+        things.sort(key=lambda t: t.Status.Order)
+
+        return '\n'.join([
+            '[{0}] {1} {2}'.format(t.Status.Name, t.Name, t.url)
+            for t in things
+        ])
+
+    if action != u'add':
+        raise QuitNow('I can\'t just "{0}" that, {{nick}}'.format(action))
+
+    name = ' '.join(args)
+
+    if not name:
+        raise QuitNow('I\'m going to need a title for that, {nick}')
+
+    t = create_object(
+        Klass,
+        Name=name,
+        Parent=workitem.idref,
+    )
+
+    raise QuitNow('I created {0} {1} for you, {{nick}}'.format(t.Name, t.url))
+
+
+@deferred_to_channel
+def tasks_command(client, channel, nick, number, action=None, *args):
+    return _list_or_add_things(Task, number, action, *args)
+
+
+@deferred_to_channel
+def tests_command(client, channel, nick, number, action=None, *args):
+    return _list_or_add_things(Test, number, action, *args)
+
+
 @deferred_to_channel
 def user_command(client, channel, nick, *args):
     # Recombine space'd args for full name lookup
@@ -296,12 +360,13 @@ def versionone_command(client, channel, nick, message, cmd, args):
         return [
             'Usage for versionone (alias v1)',
 
-            '!v1 add [task | test] to <ticket-id> ... - Create a new task or test',
             '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
             '!v1 reload - Reloads metadata from V1 server',
             '!v1 review <issue> [!]<text> - Lookup, append, or set codereview field (alias: cr)',
             '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
+            '!v1 tasks <ticket-id> (add <title>) - List tasks for ticket, or add one',
             '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
+            '!v1 tests <ticket-id> (add <title>) - List tests for ticket, or add one',
 
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
@@ -368,7 +433,9 @@ COMMAND_MAP = {
     'reload': reload_v1,
     'review': review_command,
     'take': take_command,
+    'tasks': tasks_command,
     'team': team_command,
     'teams': team_command,
+    'tests': tests_command,
     'user': user_command,
 }
