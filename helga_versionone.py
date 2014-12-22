@@ -295,11 +295,14 @@ def versionone_command(client, channel, nick, message, cmd, args):
     except IndexError:
         return [
             'Usage for versionone (alias v1)',
-            '!v1 reload - Reloads metadata from V1 server',
-            '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
-            '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
-            '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
+
             '!v1 add [task | test] to <ticket-id> ... - Create a new task or test',
+            '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
+            '!v1 reload - Reloads metadata from V1 server',
+            '!v1 review <issue> [!]<text> - Lookup, append, or set codereview field (alias: cr)',
+            '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
+            '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
+
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
 
