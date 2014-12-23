@@ -28,6 +28,7 @@ setup(name="helga-versionone",
       py_modules=['helga_versionone'],
       install_requires=[
           'v1pysdk-unofficial',
+          'oauth2client',
       ],
       entry_points = dict(
           helga_plugins=[
