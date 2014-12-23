@@ -1,0 +1,139 @@
+"""Patch v1pysdk to use non-file credential stores"""
+
+import logging
+import httplib2
+
+from functools import wraps
+from urlparse import urlparse
+from v1pysdk.client import V1Server
+from v1pysdk.v1meta import V1Meta
+
+try:
+    from xml.etree import ElementTree
+except ImportError:
+    from elementtree import ElementTree
+
+
+logger = logging.getLogger(__name__)
+
+
+class property_required(object):
+    """Decorate a method to require certian properties be populated"""
+
+    def __init__(self, *args):
+        """Arguments to the decorator are proprties which must be non-None"""
+        self.props = args
+
+    def __call__(self, fn):
+        """Called once durring decoration, returns the real func to be called"""
+
+        @wraps(fn)
+        def wrapped_fn(herself, *args, **kwargs):
+            for prop in self.props:
+                if getattr(herself, prop, None) is None:
+                    msg = 'Required property {0} is missing from {1}'.format(prop, herself)
+                    logger.error(msg)
+                    raise ValueError(msg)
+            return fn(herself, *args, **kwargs)
+
+        return wrapped_fn
+
+
+class HelgaV1Meta(V1Meta):
+    def __init__(self, *args, **kw):
+        # Coppied from V1Meta, but use our own Server class
+        self.server = HelgaOauthV1Server(*args, **kw)
+        self.global_cache = {}
+        self.dirtylist = []
+
+
+class HelgaOauthV1Server(V1Server):
+    "Accesses a V1 HTTP server as a client of the XML API protocol"
+    API_PATH = "/rest-1.oauth.v1"
+
+    def __init__(self, address="localhost", instance="VersionOne.Web",
+                 scheme="http", instance_url=None, credentials=None):
+        # Do not make super call, base implementation requires username/password
+        if instance_url:
+            self.instance_url = instance_url
+            parsed = urlparse(instance_url)
+            self.address = parsed.netloc
+            self.instance = parsed.path.strip('/')
+            self.scheme = parsed.scheme
+        else:
+            self.address = address
+            self.instance = instance.strip('/')
+            self.scheme = scheme
+            self.instance_url = self.build_url('')
+
+        self.httpclient = None
+
+        if credentials is not None:
+            self.set_credentials(credentials)
+
+    # No attempt is made to clear the cache when the creds change.
+    # We assume all users have the same read-access.
+    def set_credentials(self, creds):
+        # If there are memory leaks, they might come from here
+        self.httpclient = httplib2.Http()
+        creds.authorize(self.httpclient)
+
+    @property_required('httpclient')
+    def http_get(self, url):
+        return self.httpclient.request(url, method='GET')
+
+    @property_required('httpclient')
+    def http_post(self, url, data=''):
+        return self.httpclient.request(url, method='POST', body=data)
+
+    def fetch(self, path, query='', postdata=None):
+        "Perform an HTTP GET or POST depending on whether postdata is present"
+        url = self.build_url(path, query=query)
+        try:
+            if postdata is not None:
+                if isinstance(postdata, dict):
+                    postdata = urlencode(postdata)
+                response, body = self.http_post(url, postdata)
+            else:
+                response, body = self.http_get(url)
+            return (None, body)
+        except HTTPError, e:
+            if e.code == 401:
+                raise
+            body = e.fp.read()
+            return (e, body)
+
+    def get_asset_xml(self, asset_type_name, oid):
+        path = self.API_PATH + '/Data/{0}/{1}'.format(asset_type_name, oid)
+        return self.get_xml(path)
+
+    def get_query_xml(self, asset_type_name, where=None, sel=None):
+        path = self.API_PATH + '/Data/{0}'.format(asset_type_name)
+        query = {}
+        if where is not None:
+                query['Where'] = where
+        if sel is not None:
+                query['sel'] = sel
+        return self.get_xml(path, query=query)
+
+    def execute_operation(self, asset_type_name, oid, opname):
+        path = self.API_PATH + '/Data/{0}/{1}'.format(asset_type_name, oid)
+        query = {'op': opname}
+        return self.get_xml(path, query=query, postdata={})
+
+    def get_attr(self, asset_type_name, oid, attrname):
+        path = self.API_PATH + '/Data/{0}/{1}/{2}'.format(asset_type_name, oid, attrname)
+        return self.get_xml(path)
+
+    def create_asset(self, asset_type_name, xmldata, context_oid=''):
+        body = ElementTree.tostring(xmldata, encoding="utf-8")
+        query = {}
+        if context_oid:
+            query = {'ctx': context_oid}
+        path = self.API_PATH + '/Data/{0}'.format(asset_type_name)
+        return self.get_xml(path, query=query, postdata=body)
+
+    def update_asset(self, asset_type_name, oid, update_doc):
+        newdata = ElementTree.tostring(update_doc, encoding='utf-8')
+        path = self.API_PATH + '/Data/{0}/{1}'.format(asset_type_name, oid)
+        return self.get_xml(path, postdata=newdata)

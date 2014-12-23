@@ -2,8 +2,8 @@ import re
 from functools import wraps, partial
 
 import smokesignal
+from oauth2client.client import OAuth2Credentials, OAuth2WebServerFlow, FlowExchangeError
 from twisted.internet import reactor, task
-from v1pysdk import V1Meta
 
 from helga import log, settings
 from helga.db import db
@@ -11,15 +11,16 @@ from helga.plugins import command, match, random_ack, ResponseNotReady
 from helga.util.encodings import to_unicode
 
 
+USE_OAUTH = getattr(settings, 'VERSIONONE_OAUTH_ENABLED', False)
+if USE_OAUTH:
+    from helga_versionone.v1_wrapper import HelgaV1Meta as V1Meta
+else:
+    from v1pysdk import V1Meta
+
 logger = log.getLogger(__name__)
 VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG'])
 
 v1 = None
-Member = None
-Task = None
-Team = None
-Test = None
-Workitem = None
 
 
 class NotFound(Exception):
@@ -31,8 +32,11 @@ class QuitNow(Exception):
 
 
 def bad_args(client, channel, nick, failure):
-    failure.trap(TypeError)
-    client.msg(channel, u'Umm... {0}, you might want to check the docs for that'.format(nick))
+    failure.trap(TypeError, AttributeError)
+    if v1 is None:
+        client.msg(channel, u'{0}, you might want to try "!v1 oauth"'.format(nick))
+    else:
+        client.msg(channel, u'Umm... {0}, you might want to check the docs for that'.format(nick))
 
 
 def quit_now(client, channel, nick, failure):
@@ -40,21 +44,28 @@ def quit_now(client, channel, nick, failure):
     client.msg(channel, failure.value.message.format(channel=channel, nick=nick))
 
 
-def deferred_to_channel(fn):
-    @wraps(fn)
-    def wrapper(client, channel, nick, *args):
-        task.deferLater(
-            reactor, 0, fn, client, channel, nick, *args
-        ).addCallback(
-            partial(client.msg, channel)
-        ).addErrback(
-            partial(bad_args, client, channel, nick)
-        ).addErrback(
-            partial(quit_now, client, channel, nick)
-        )
-        logger.debug('Delaying exection of {0}'.format(fn.__name__))
-        raise ResponseNotReady
-    return wrapper
+class deferred_response(object):
+    def __init__(self, target):
+        self.target = target
+
+    def __call__(self, fn):
+        @wraps(fn)
+        def wrapper(client, channel, nick, *args):
+            task.deferLater(
+                reactor, 0, fn, client, channel, nick, *args
+            ).addCallback(
+                partial(client.msg, locals()[self.target])
+            ).addErrback(
+                partial(bad_args, client, channel, nick)
+            ).addErrback(
+                partial(quit_now, client, channel, nick)
+            )
+            logger.debug('Delaying exection of {0}'.format(fn.__name__))
+            raise ResponseNotReady
+        return wrapper
+
+deferred_to_channel = deferred_response('channel')
+deferred_to_nick = deferred_response('nick')
 
 
 def commit_changes(*args):
@@ -91,16 +102,13 @@ def _get_things(Klass, workitem, *args):
         args = ['Name', 'Status.Name', 'Status.Order']
     return Klass.where(Parent=workitem.idref).select(*args)
 
-get_tasks = partial(_get_things, Task)
-get_tests = partial(_get_things, Test)
-
 
 def get_workitem(number, *args):
     """Get a workitem or die trying.
        args are passed to select to pre-populate fields
     """
     try:
-        return Workitem.where(Number=number).select(*args).first()
+        return v1.Workitem.where(Number=number).select(*args).first()
     except IndexError:
         raise QuitNow('I\'m sorry {{nick}}, item "{0}" not found'.format(number))
 
@@ -114,7 +122,7 @@ def get_user(nick):
         pass
 
     try:
-        return Member.filter(
+        return v1.Member.filter(
             "Name='{0}'|Nickname='{0}'|Username='{0}'".format(nick)
         ).select(
             'Name', 'Nickname'
@@ -124,6 +132,32 @@ def get_user(nick):
             'I\'m sorry {{nick}}, couldn\'t find {0} in VersionOne as {1}. '
             'Check !v1 alias'.format(o_nick, nick)
         )
+
+
+def get_creds(nick):
+    auth_info = db.v1_oauth.find_one({'irc_nick': nick}) or None
+    # Try to trim nick for usual things
+    if auth_info is None:
+        if '|' in nick:
+            nick = nick.split('|', 1)[0].strip()
+        elif '_' in nick:
+            nick = nick.split('_', 1)[0].strip()
+        auth_info = db.v1_oauth.find_one({'irc_nick': nick}) or {}
+
+    try:
+        return OAuth2Credentials(
+            auth_info['access_token'],
+            settings.VERSIONONE_OAUTH_CLIENT_ID,
+            settings.VERSIONONE_OAUTH_CLIENT_SECRET,
+            auth_info['refresh_token'],
+            auth_info['token_expiry'],
+            settings.VERSIONONE_URL + '/oauth.v1/token',
+            'helga (chatbot)',
+        )
+    except Exception:
+        # TODO - what can get raised here
+        logger.warning('Problem getting creds for {0}'.format(nick), exc_info=True)
+        raise QuitNow('Sorry {{nick}}, couldn\'t get OAuth creds for you, try "!v1 oauth"')
 
 
 @deferred_to_channel
@@ -162,7 +196,7 @@ def alias_command(client, channel, nick, *args):
 
     elif subcmd == 'remove':
         if target != nick:
-            return 'That\'s not nice {0}. You can\'t remove {0}'.format(nick, target)
+            return 'That\'s not nice {0}. You can\'t remove {1}'.format(nick, target)
         lookup = {'irc_nick': nick}
         db.v1_user_map.find_and_modify(lookup, remove=True)
     else:
@@ -171,26 +205,63 @@ def alias_command(client, channel, nick, *args):
     return random_ack()
 
 
-def reload_v1(client, channel, nick):
-    """Rebuild the V1 metadata, needed after meta data changes in the app"""
-    global Member, Task, Team, Test, Workitem, v1
+@deferred_to_nick
+def oauth_command(client, channel, nick, reply_code=None):
+    if not USE_OAUTH:
+        return "Oauth is not enabled"
+
+    client = OAuth2WebServerFlow(
+        settings.VERSIONONE_OAUTH_CLIENT_ID,
+        settings.VERSIONONE_OAUTH_CLIENT_SECRET,
+        'apiv1',  # Scope for XML api
+        redirect_uri='urn:ietf:wg:oauth:2.0:oob',
+        auth_uri=settings.VERSIONONE_URL + '/oauth.v1/auth',
+        token_uri=settings.VERSIONONE_URL + '/oauth.v1/token',
+    )
+
+
+    if reply_code:
+        q = {'irc_nick': nick}
+        auth_info = db.v1_oauth.find_one(q) or q
+        try:
+            creds = client.step2_exchange(reply_code)
+        except FlowExchangeError as e:
+            return 'Sorry {0} "{1}" happened. Try "!v1 oauth" again from the start'.format(nick, e)
+
+        # Creds Ok, save the info
+        auth_info['access_token'] = creds.access_token
+        auth_info['refresh_token'] = creds.refresh_token
+        auth_info['token_expiry'] = creds.token_expiry
+        db.v1_oauth.save(auth_info)
+        return random_ack()
+
+    # No reply_code - show step1 link
+    return 'Visit {0} then do "!v1 oauth <code>" with the generated code'.format(
+        client.step1_get_authorize_url())
+
+
+def get_v1(nick):
+    """Get the v1 connection"""
 
     try:
-        v1 = V1Meta(
-            instance_url=settings.VERSIONONE_URL,
-            username=settings.VERSIONONE_AUTH[0],
-            password=settings.VERSIONONE_AUTH[1],
-        )
-
-        Member = v1.Member
-        Task = v1.Task
-        Team = v1.Team
-        Test = v1.Test
-        Workitem = v1.Workitem
+        if USE_OAUTH:
+            v1 = V1Meta(
+                instance_url=settings.VERSIONONE_URL,
+                credentials=get_creds(nick),
+            )
+        else:
+            # Too much overhead, don't really need to re-init every call
+            v1 = V1Meta(
+                instance_url=settings.VERSIONONE_URL,
+                username=settings.VERSIONONE_AUTH[0],
+                password=settings.VERSIONONE_AUTH[1],
+            )
 
     except AttributeError:
         logger.error('VersionOne plugin misconfigured, check your settings')
-    return random_ack()
+        raise
+
+    return v1
 
 
 def _get_review(item):
@@ -259,7 +330,7 @@ def team_command(client, channel, nick, *args):
         ]) if teams else 'No teams found for {0}'.format(channel)
     elif subcmd == 'add':
         try:
-            team = Team.where(Name=name).first()
+            team = v1.Team.where(Name=name).first()
         except IndexError:
             return 'I\'m sorry {0}, team name "{1}" not found'.format(nick, name)
         # Manually building a url is lame, but the url property on TeamRooms doesn't work
@@ -290,7 +361,8 @@ def take_command(client, channel, nick, number):
     return commit_changes((w, 'Owners', [user]))
 
 
-def _list_or_add_things(Klass, number, action=None, *args):
+def _list_or_add_things(class_name, number, action=None, *args):
+    Klass = getattr(v1, class_name)
     workitem = get_workitem(number)
     if action is None:
         things = list(_get_things(Klass, workitem))
@@ -299,7 +371,7 @@ def _list_or_add_things(Klass, number, action=None, *args):
         return '\n'.join([
             '[{0}] {1} {2}'.format(t.Status.Name, t.Name, t.url)
             for t in things
-        ])
+        ]) if things else 'Didn\'t find any {0}s for {1}'.format(class_name, number)
 
     if action != u'add':
         raise QuitNow('I can\'t just "{0}" that, {{nick}}'.format(action))
@@ -320,12 +392,12 @@ def _list_or_add_things(Klass, number, action=None, *args):
 
 @deferred_to_channel
 def tasks_command(client, channel, nick, number, action=None, *args):
-    return _list_or_add_things(Task, number, action, *args)
+    return _list_or_add_things('Task', number, action, *args)
 
 
 @deferred_to_channel
 def tests_command(client, channel, nick, number, action=None, *args):
-    return _list_or_add_things(Test, number, action, *args)
+    return _list_or_add_things('Test', number, action, *args)
 
 
 @deferred_to_channel
@@ -361,12 +433,13 @@ def versionone_command(client, channel, nick, message, cmd, args):
             'Usage for versionone (alias v1)',
 
             '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
-            '!v1 reload - Reloads metadata from V1 server',
+            '!v1 oauth - Configures your oauth tokens',
             '!v1 review <issue> [!]<text> - Lookup, append, or set codereview field (alias: cr)',
             '!v1 take <ticket-id> - Add yourself to the ticket\'s Owners',
             '!v1 tasks <ticket-id> (add <title>) - List tasks for ticket, or add one',
             '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
             '!v1 tests <ticket-id> (add <title>) - List tests for ticket, or add one',
+            '!v1 user <nick> - Lookup V1 user for an ircnick',
 
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
@@ -393,7 +466,7 @@ def versionone_full_descriptions(client, channel, nick, message, matches):
             'number': s.Number,
             'url': s.url,
         })
-        for s in Workitem.filter(
+        for s in v1.Workitem.filter(
             # OR join on each number
             '|'.join(["Number='{0}'".format(n) for n in matches])
         ).select('Name', 'Number')
@@ -412,6 +485,15 @@ def versionone(client, channel, nick, message, *args):
 
     Issue numbers are automatically detected.
     """
+
+    # TODO - globals suck, and some commands don't need v1... refactor
+    try:
+        global v1
+        v1 = get_v1(nick)
+    except QuitNow:
+        logger.warning('No v1 connection for {0}'.format(nick))
+        v1 = None
+
     if len(args) == 2:
         # args = [cmd, args]
         fn = versionone_command
@@ -421,16 +503,10 @@ def versionone(client, channel, nick, message, *args):
     return fn(client, channel, nick, message, *args)
 
 
-@smokesignal.on('signon')
-def init_versionone(*args, **kwargs):
-    # Three require positionals because it's a subcommand
-    reload_v1(None, None, None)
-
-
 COMMAND_MAP = {
     'alias': alias_command,
     'cr': review_command,
-    'reload': reload_v1,
+    'oauth': oauth_command,
     'review': review_command,
     'take': take_command,
     'tasks': tasks_command,
