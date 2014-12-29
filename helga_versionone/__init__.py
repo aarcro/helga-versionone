@@ -1,14 +1,12 @@
 import re
 from functools import wraps, partial
 
-import smokesignal
 from oauth2client.client import OAuth2Credentials, OAuth2WebServerFlow, FlowExchangeError
 from twisted.internet import reactor, task
 
 from helga import log, settings
 from helga.db import db
 from helga.plugins import command, match, random_ack, ResponseNotReady
-from helga.util.encodings import to_unicode
 
 
 USE_OAUTH = getattr(settings, 'VERSIONONE_OAUTH_ENABLED', False)
