@@ -334,9 +334,9 @@ def team_command(client, channel, nick, *args):
         except IndexError:
             return 'I\'m sorry {0}, team name "{1}" not found'.format(nick, name)
         # Manually building a url is lame, but the url property on TeamRooms doesn't work
-        teams[name] = (team.intid, ', '.join([
+        teams[name] = ', '.join([
             '{0}/TeamRoom.mvc/Show/{1}'.format(settings.VERSIONONE_URL, r.intid) for r in team.Rooms
-        ]) or team.url)
+        ]) or team.url
     elif subcmd == 'remove':
         try:
             del teams[name]
