@@ -17,13 +17,6 @@ settings_stub = stub(
     VERSIONONE_OAUTH_CLIENT_SECRET='client_secret',
 )
 
-settings_patcher = patch('helga_versionone.settings', settings_stub)
-# This is aweful, but it needs to be in effect while deferreds run
-# Need a meta class to add a deferred_patch to all test commands :(
-settings_stub = settings_patcher.start()
-
-# TODO - db should also always be patched
-
 
 class deferred_patch(object):
     """Patches target until the deferred returns, appends patched object to args"""
@@ -42,19 +35,70 @@ class deferred_patch(object):
         return inner
 
 
-class TestCommands(unittest.TestCase):
+def stop_patches(fn):
+    @wraps(fn)
+    def inner(self, *args, **kwargs):
+        res = fn(self, *args, **kwargs)
+        if isinstance(res, Deferred):
+            # clearPatches() is always None, so return x, don't eat it (allows failures to propagate)
+            return res.addBoth(lambda x: self.clearPatches() or x)
+        # Not deferred, stop patches and return
+        self.clearPatches()
+        return res
+    return inner
+
+
+class V1TestCaseMeta(type):
+    def __new__(meta, name, bases, dct):
+        """Decorate all test methods in dct"""
+        for fn_name, fn in dct.iteritems():
+            # Named test* and is a method
+            if fn_name.startswith('test') and callable(fn):
+                dct[fn_name] = stop_patches(fn)
+
+        return super(V1TestCaseMeta, meta).__new__(meta, name, bases, dct)
+
+
+class V1TestCase(unittest.TestCase):
+    """Base class for all helga_versionone tests
+       get_v1 is always patched to return self.v1 - a MagicMock()
+       helga_versionone.settings is always patched
+       helga_versionone.db is always patched
+    """
+    __metaclass__ = V1TestCaseMeta
+
     nick = 'me'
     channel = '#bots'
 
+    # Keys from patches will be attrs on TestCase instances
+    # Freely change them in each test, they will be cleaned up
+    # after sync return or deferred callback
+
+    patches = {
+        'db': ['helga_versionone.db'],
+        'settings': ['helga_versionone.settings', settings_stub],
+        'get_v1': ['helga_versionone.get_v1'],
+    }
+
     def setUp(self):
-        self.client = MagicMock()
-        self.v1_patcher = patch('helga_versionone.get_v1')
+        # Before each test, start the patches
+        # metaclass has decorated the test methods to call clearPatches
+        for attr, args in self.patches.iteritems():
+            patcher = patch(*args)
+            setattr(self, '_{0}_patcher'.format(attr), patcher)
+            setattr(self, attr, patcher.start())
+
         self.v1 = MagicMock()
-        self.get_v1 = self.v1_patcher.start()
+        # Depends on "get_v1" being in patches above
         self.get_v1.return_value = self.v1
 
-    def tearDown(self):
-        self.v1_patcher.stop()
+        # client is mocked, but doesn't have to be patched.
+        self.client = MagicMock()
+        super(V1TestCase, self).setUp()
+
+    def clearPatches(self):
+        for p in self.patches.keys():
+            getattr(self, '_{0}_patcher'.format(p)).stop()
 
     def assertAck(self):
         self.assertIn(self.client.msg.call_args[0][1], ACKS)
@@ -83,27 +127,28 @@ class TestCommands(unittest.TestCase):
         else:
             self.assertEqual(d, expected)
 
+
+class TestCommands(V1TestCase):
+
     def test_no_patching(self):
         # settings can be overridded
         from helga_versionone import settings
         assert settings.VERSIONONE_URL == 'https://www.example.com/EnvKey'
 
-    @patch.dict(settings_stub.__dict__, VERSIONONE_URL='tada')
     def test_patching(self):
         # settings can be overridden
+        self.settings.VERSIONONE_URL = 'tada'
         assert helga_versionone.settings.VERSIONONE_URL == 'tada'
 
     def test_bad_command(self):
         return self._test_command('notreal', u'Umm... notreal, Never heard of it?')
 
-    @deferred_patch('helga_versionone.db')
-    def test_no_teams(self, db):
-        db.v1_channel_settings.find_one.return_value = None
+    def test_no_teams(self):
+        self.db.v1_channel_settings.find_one.return_value = None
         return self._test_command('teams', u'No teams found for {0}'.format(self.channel))
 
-    @deferred_patch('helga_versionone.db')
-    def test_teams(self, db):
-        db.v1_channel_settings.find_one.return_value = {'teams': {'teamName': 'link'}}
+    def test_teams(self):
+        self.db.v1_channel_settings.find_one.return_value = {'teams': {'teamName': 'link'}}
         return self._test_command('teams', u'teamName link')
 
     def test_team_add_fail(self):
@@ -113,9 +158,8 @@ class TestCommands(unittest.TestCase):
             u'I\'m sorry {0}, team name "not there" not found'.format(self.nick),
         )
 
-    @deferred_patch('helga_versionone.db')
-    def test_team_add_ok_url(self, db):
-        db.v1_channel_settings.find_one.return_value = None
+    def test_team_add_ok_url(self):
+        self.db.v1_channel_settings.find_one.return_value = None
         team = MagicMock()
         team.url = 'http://example.com/'
         team.Rooms = []
@@ -126,16 +170,15 @@ class TestCommands(unittest.TestCase):
 
         def check(res):
             # call_args[0] ==> *args
-            self.assertEqual(db.v1_channel_settings.save.call_args[0][0]['teams']['team name'], team.url)
+            self.assertEqual(self.db.v1_channel_settings.save.call_args[0][0]['teams']['team name'], team.url)
             self.assertAck()
 
         d.addCallback(check)
         return d
 
-    @deferred_patch('helga_versionone.db')
-    def test_team_add_ok_rooms(self, db):
+    def test_team_add_ok_rooms(self):
         # Needs settings patched through deferred
-        db.v1_channel_settings.find_one.return_value = None
+        self.db.v1_channel_settings.find_one.return_value = None
         team = MagicMock()
         team.Rooms = [stub(intid=3)]
         self.v1.Team.where().first.return_value = team
@@ -145,7 +188,7 @@ class TestCommands(unittest.TestCase):
 
         def check(res):
             self.assertEqual(
-                db.v1_channel_settings.save.call_args[0][0]['teams']['team name'],
+                self.db.v1_channel_settings.save.call_args[0][0]['teams']['team name'],
                 '{0}/TeamRoom.mvc/Show/3'.format(settings_stub.VERSIONONE_URL),
             )
             self.assertAck()
@@ -153,17 +196,15 @@ class TestCommands(unittest.TestCase):
         d.addCallback(check)
         return d
 
-    @deferred_patch('helga_versionone.db')
-    def test_team_remove_fail(self, db):
-        db.v1_channel_settings.find_one.return_value = None
+    def test_team_remove_fail(self):
+        self.db.v1_channel_settings.find_one.return_value = None
         return self._test_command(
             'team remove team name',
             'I\'m sorry {0}, team name "team name" not found for {1}'.format(self.nick, self.channel),
         )
 
-    @deferred_patch('helga_versionone.db')
-    def test_team_remove_ok(self, db):
-        db.v1_channel_settings.find_one().get.return_value = {'this one': 'http://example.com'}
+    def test_team_remove_ok(self):
+        self.db.v1_channel_settings.find_one().get.return_value = {'this one': 'http://example.com'}
         d = self._test_command(
             'team remove this one',
         )
@@ -171,8 +212,7 @@ class TestCommands(unittest.TestCase):
         d.addCallback(lambda _: self.assertAck())
         return d
 
-    @deferred_patch('helga_versionone.db')
-    def test_team_no_command(self, db):
+    def test_team_no_command(self):
         return self._test_command(
             'team naugty',
             'No {0}, you can\'t naugty!'.format(self.nick),
