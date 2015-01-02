@@ -205,7 +205,7 @@ def alias_command(v1, client, channel, nick, *args):
 @deferred_to_nick
 def oauth_command(v1, client, channel, nick, reply_code=None):
     if not USE_OAUTH:
-        return "Oauth is not enabled"
+        return 'Oauth is not enabled'
 
     client = OAuth2WebServerFlow(
         settings.VERSIONONE_OAUTH_CLIENT_ID,
