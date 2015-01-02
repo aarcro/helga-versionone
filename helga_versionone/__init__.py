@@ -427,7 +427,6 @@ def versionone_command(v1, client, channel, nick, message, cmd, args):
     except IndexError:
         return [
             'Usage for versionone (alias v1)',
-
             '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
             '!v1 oauth - Configures your oauth tokens',
             '!v1 review <issue> [!]<text> - Lookup, append, or set codereview field (alias: cr)',
@@ -436,7 +435,6 @@ def versionone_command(v1, client, channel, nick, message, cmd, args):
             '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
             '!v1 tests <ticket-id> (add <title>) - List tests for ticket, or add one',
             '!v1 user <nick> - Lookup V1 user for an ircnick',
-
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
 
@@ -445,6 +443,7 @@ def versionone_command(v1, client, channel, nick, message, cmd, args):
     except KeyError:
         return u'Umm... {0}, Never heard of it?'.format(subcmd)
     except TypeError:
+        # can only be reached by a command that doesn't use the deffered_to_* wrapper
         return u'Umm... {0}, you might want to check the docs for {1}'.format(nick, subcmd)
 
 
@@ -480,7 +479,6 @@ def versionone(client, channel, nick, message, *args):
     Issue numbers are automatically detected.
     """
 
-    # TODO - globals suck, and some commands don't need v1... refactor
     try:
         v1 = get_v1(nick)
     except QuitNow:

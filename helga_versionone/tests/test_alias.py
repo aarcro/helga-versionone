@@ -36,6 +36,14 @@ class TestAliasCommand(V1TestCase):
             '{0} is known as nickname in V1'.format(self.nick),
         )
 
+    def test_lookup_is_default(self):
+        # v1_nick = db.v1_user_map.find_one(lookup)['v1_nick']
+        self.db.v1_user_map.find_one.return_value = {}
+        return self._test_command(
+            'alias fhqwhgads',
+            'fhqwhgads is known as fhqwhgads in V1',
+        )
+
     def test_lookup_other__no_match(self):
         # v1_nick = db.v1_user_map.find_one(lookup)['v1_nick']
         self.db.v1_user_map.find_one.return_value = {}

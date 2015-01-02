@@ -1,5 +1,4 @@
-from mock import MagicMock
-from pretend import stub
+from mock import MagicMock, patch
 
 import helga_versionone
 
@@ -20,78 +19,117 @@ class TestCommands(V1TestCase):
     def test_bad_command(self):
         return self._test_command('notreal', u'Umm... notreal, Never heard of it?')
 
+    def test_get_workitem_found(self):
+        self.v1.Workitem.where().select().first.return_value = 'foo'
+        f = helga_versionone.get_workitem(self.v1, 'B-00010')
+        self.assertEquals(f, 'foo')
 
-class TestTeamCommand(V1TestCase):
-    def test_no_teams(self):
-        self.db.v1_channel_settings.find_one.return_value = None
-        return self._test_command('teams', u'No teams found for {0}'.format(self.channel))
+    def test_get_workitem_not_found(self):
+        self.v1.Workitem.where.side_effect = IndexError
+        self.assertRaises(helga_versionone.QuitNow, helga_versionone.get_workitem, self.v1, 'B-00010')
 
-    def test_teams(self):
-        self.db.v1_channel_settings.find_one.return_value = {'teams': {'teamName': 'link'}}
-        return self._test_command('teams', u'teamName link')
+    def test_get_user_found(self):
+        self.v1.Member.filter().select().first.return_value = 'foo'
+        u = helga_versionone.get_user(self.v1, self.nick)
+        self.assertEquals(u, 'foo')
 
-    def test_team_add_fail(self):
-        self.v1.Team.where.side_effect = IndexError
+    def test_get_user_not_found(self):
+        self.v1.Member.filter.side_effect = IndexError
+        self.assertRaises(helga_versionone.QuitNow, helga_versionone.get_user, self.v1, self.nick)
+
+    def test_get_user_with_no_alias(self):
+        self.db.v1_user_map.find_one.side_effect = KeyError
+        self.v1.Member.filter().select().first.return_value = 'foo'
+        u = helga_versionone.get_user(self.v1, self.nick)
+        self.assertEquals(u, 'foo')
+
+    @patch('helga_versionone.OAuth2Credentials')
+    def _test_get_creds(self, name, mock_OAuth2Credentials, oauth_works=True):
+        # First call should fail, so nick re-writing happens
+        # Second needs keys for the call to OAuth2Credentials
+        self.db.v1_oauth.find_one.side_effect = [None, MagicMock()]
+        if oauth_works:
+            mock_OAuth2Credentials.return_value = 'foo'
+        else:
+            mock_OAuth2Credentials.side_effect = KeyError
+
+        if oauth_works:
+            c = helga_versionone.get_creds(name)
+            self.assertEquals(c, 'foo')
+        else:
+            self.assertRaises(helga_versionone.QuitNow, helga_versionone.get_creds, name)
+
+    def test_get_creds_plain(self):
+        self._test_get_creds('somename')
+
+    def test_get_creds_underscore(self):
+        self._test_get_creds('somename_away')
+
+    def test_get_creds_pipe(self):
+        self._test_get_creds('some_name|away')
+
+    def test_get_creds_fail_oauth(self):
+        self._test_get_creds('fhqwhgads', oauth_works=False)
+
+    def test_find_all(self):
+        numbers = helga_versionone.find_versionone_numbers('Tell me about B-0010')
+        self.assertEquals(numbers, ['B-0010'])
+
+    def test_usage(self):
+        res = self._test_command('')
+        self.assertIn('Usage for versionone', res[0])
+
+    def test_bad_arg_count(self):
         return self._test_command(
-            'teams add not there',
-            u'I\'m sorry {0}, team name "not there" not found'.format(self.nick),
+            'take',
+            u'Umm... {0}, you might want to check the docs for that'.format(self.nick),
         )
 
-    def test_team_add_ok_url(self):
-        self.db.v1_channel_settings.find_one.return_value = None
-        team = MagicMock()
-        team.url = 'http://example.com/'
-        team.Rooms = []
-        self.v1.Team.where().first.return_value = team
-        d = self._test_command(
-            'teams add team name',
+    @patch('helga_versionone.versionone_full_descriptions')
+    def test_plugin_match(self, fn):
+        msg = 'Tell me about B-0010',
+        matches = ['B-0010']
+        helga_versionone.versionone(
+            self.client,
+            self.channel,
+            self.nick,
+            msg,
+            matches,
         )
 
-        def check(res):
-            # call_args[0] ==> *args
-            self.assertEqual(self.db.v1_channel_settings.save.call_args[0][0]['teams']['team name'], team.url)
-            self.assertAck()
-
-        d.addCallback(check)
-        return d
-
-    def test_team_add_ok_rooms(self):
-        self.db.v1_channel_settings.find_one.return_value = None
-        team = MagicMock()
-        team.Rooms = [stub(intid=3)]
-        self.v1.Team.where().first.return_value = team
-        d = self._test_command(
-            'teams add team name',
+        fn.assert_called_once_with(
+            self.v1,
+            self.client,
+            self.channel,
+            self.nick,
+            msg,
+            matches,
         )
 
-        def check(res):
-            self.assertEqual(
-                self.db.v1_channel_settings.save.call_args[0][0]['teams']['team name'],
-                '{0}/TeamRoom.mvc/Show/3'.format(self.settings.VERSIONONE_URL),
-            )
-            self.assertAck()
+    @patch('helga_versionone.versionone_command')
+    def test_plugin_subcommand(self, fn):
+        # QuitNow doesn't stop processing of command
+        self.get_v1.side_effect = helga_versionone.QuitNow()
 
-        d.addCallback(check)
-        return d
+        msg = '!v1 teams'
+        cmd = '!v1'
+        args = ['teams']
 
-    def test_team_remove_fail(self):
-        self.db.v1_channel_settings.find_one.return_value = None
-        return self._test_command(
-            'team remove team name',
-            'I\'m sorry {0}, team name "team name" not found for {1}'.format(self.nick, self.channel),
+        helga_versionone.versionone(
+            self.client,
+            self.channel,
+            self.nick,
+            msg,
+            cmd,
+            args,
         )
 
-    def test_team_remove_ok(self):
-        self.db.v1_channel_settings.find_one().get.return_value = {'this one': 'http://example.com'}
-        d = self._test_command(
-            'team remove this one',
-        )
-
-        d.addCallback(lambda _: self.assertAck())
-        return d
-
-    def test_team_no_command(self):
-        return self._test_command(
-            'team naugty',
-            'No {0}, you can\'t naugty!'.format(self.nick),
+        fn.assert_called_once_with(
+            None,
+            self.client,
+            self.channel,
+            self.nick,
+            msg,
+            cmd,
+            args,
         )
