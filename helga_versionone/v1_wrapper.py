@@ -3,6 +3,9 @@
 import logging
 import httplib2
 
+from urllib import urlencode
+
+
 from functools import wraps
 from urlparse import urlparse
 from v1pysdk.client import V1Server
@@ -97,10 +100,10 @@ class HelgaOauthV1Server(V1Server):
             else:
                 response, body = self.http_get(url)
             return (None, body)
-        except HTTPError, e:
-            if e.code == 401:
+        except httplib2.HttpLib2ErrorWithResponse, e:
+            if e.response.status == 401:
                 raise
-            body = e.fp.read()
+            body = e.content
             return (e, body)
 
     def get_asset_xml(self, asset_type_name, oid):
