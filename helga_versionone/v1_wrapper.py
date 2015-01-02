@@ -13,7 +13,7 @@ from v1pysdk.v1meta import V1Meta
 
 try:
     from xml.etree import ElementTree
-except ImportError:
+except ImportError:  # pragma: no cover
     from elementtree import ElementTree
 
 
@@ -42,7 +42,7 @@ class property_required(object):
         return wrapped_fn
 
 
-class HelgaV1Meta(V1Meta):
+class HelgaV1Meta(V1Meta):  # pragma: no cover
     def __init__(self, *args, **kw):
         # Coppied from V1Meta, but use our own Server class
         self.server = HelgaOauthV1Server(*args, **kw)
@@ -83,11 +83,11 @@ class HelgaOauthV1Server(V1Server):
 
     @property_required('httpclient')
     def http_get(self, url):
-        return self.httpclient.request(url, method='GET')
+        return self.httpclient.request(url, method='GET')  # pragma: no cover
 
     @property_required('httpclient')
     def http_post(self, url, data=''):
-        return self.httpclient.request(url, method='POST', body=data)
+        return self.httpclient.request(url, method='POST', body=data)  # pragma: no cover
 
     def fetch(self, path, query='', postdata=None):
         "Perform an HTTP GET or POST depending on whether postdata is present"
@@ -102,7 +102,7 @@ class HelgaOauthV1Server(V1Server):
             return (None, body)
         except httplib2.HttpLib2ErrorWithResponse, e:
             if e.response.status == 401:
-                raise
+                raise  # pragma: no cover
             body = e.content
             return (e, body)
 
