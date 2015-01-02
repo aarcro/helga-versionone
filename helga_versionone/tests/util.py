@@ -23,6 +23,9 @@ settings_stub = stub(
     VERSIONONE_OAUTH_CLIENT_SECRET='client_secret',
 )
 
+writeable_settings_stub = copy(settings_stub)
+writeable_settings_stub.VERSIONONE_READONLY = False
+
 
 class deferred_patch(object):
     """Patches target until the deferred returns, appends patched object to args"""

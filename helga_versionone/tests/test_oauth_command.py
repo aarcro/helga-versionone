@@ -22,7 +22,6 @@ class TestOauthCommand(V1TestCase):
     OAuth2WebServerFlow = patch('helga_versionone.OAuth2WebServerFlow')
 
     def test_get_code(self):
-        # v1_nick = db.v1_user_map.find_one(lookup)['v1_nick']
         url = 'http://example.com'
         self.OAuth2WebServerFlow().step1_get_authorize_url.return_value = url
 
