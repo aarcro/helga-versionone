@@ -354,7 +354,7 @@ def take_command(v1, client, channel, nick, number):
     if user in w.Owners:
         return 'Dude {0}, you already own it!'.format(nick)
     # Writing to Owners can only add values
-    return commit_changes((w, 'Owners', [user]))
+    return commit_changes(v1, (w, 'Owners', [user]))
 
 
 def _list_or_add_things(v1, class_name, number, action=None, *args):

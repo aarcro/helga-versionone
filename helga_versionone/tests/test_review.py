@@ -1,5 +1,4 @@
 from mock import patch
-from pretend import stub
 
 from .util import V1TestCase, writeable_settings_stub, settings_stub
 
