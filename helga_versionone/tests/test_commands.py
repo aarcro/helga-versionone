@@ -1,4 +1,5 @@
 from mock import MagicMock, patch
+from pretend import stub
 
 import helga_versionone
 
@@ -133,3 +134,73 @@ class TestCommands(V1TestCase):
             cmd,
             args,
         )
+
+    def test_no_v1_for_command(self):
+        self.v1 = None
+        # For coverage, hit bad_args with v1 == None
+        return self._test_command(
+            'tasks B-0010 fhqwhgads',
+            u'{0}, you might want to try "!v1 oauth"'.format(self.nick),
+        )
+
+    def test_versionone_full_descriptions(self):
+        w = stub(
+            Name='Issue name',
+            Number='B-0010',
+            url='http://example.com',
+        )
+        self.v1.Workitem.filter().select.return_value = [w]
+
+        d = helga_versionone.versionone_full_descriptions(
+            self.v1,
+            self.client,
+            self.channel,
+            self.nick,
+            'Something about B-0010',
+            ['B-0010'],
+        )
+
+        def check(res):
+            self.client.msg.assert_called_once_with(
+                self.channel,
+                '[{number}] {name} ({url})'.format(**{
+                    'name': w.Name,
+                    'number': w.Number,
+                    'url': w.url,
+                })
+            )
+
+        d.addCallback(check)
+        return d
+
+
+class TestUserCommand(V1TestCase):
+    get_user = patch('helga_versionone.get_user', return_value=stub(
+        Name='fhqwhgads',
+        Nickname='joe',
+        url='http://example.com',
+    ))
+
+    def test_user_default_command(self):
+        d = self._test_command(
+            'user',
+            'fhqwhgads [joe] (http://example.com)',
+        )
+
+        def check(res):
+            self.get_user.assert_called_once_with(self.v1, self.nick)
+
+        d.addCallback(check)
+        return d
+
+    def test_user_explicit_command(self):
+        d = self._test_command(
+            'user fhqwhgads',
+            'fhqwhgads [joe] (http://example.com)',
+        )
+
+        def check(res):
+            self.get_user.assert_called_once_with(self.v1, 'fhqwhgads')
+
+        d.addCallback(check)
+        return d

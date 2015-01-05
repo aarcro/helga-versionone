@@ -12,7 +12,7 @@ from helga.plugins import command, match, random_ack, ResponseNotReady
 
 USE_OAUTH = getattr(settings, 'VERSIONONE_OAUTH_ENABLED', False)
 if USE_OAUTH:
-    from helga_versionone.v1_wrapper import HelgaV1Meta as V1Meta
+    from helga_versionone.v1_wrapper import HelgaV1Meta as V1Meta  # pragma: no cover
 else:
     from v1pysdk import V1Meta
 

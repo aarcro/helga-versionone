@@ -2,7 +2,7 @@ import logging
 
 from copy import copy
 from functools import wraps
-from mock import MagicMock, call, patch
+from mock import MagicMock, patch
 from mock import _patch as Patch
 from pretend import stub
 from twisted.internet.defer import Deferred
@@ -163,7 +163,7 @@ class V1TestCase(PatchedTestCase):
             target = self.nick if to_nick else self.channel
 
             def check(actual):
-                self.assertEqual(call(target, expected), self.client.msg.call_args)
+                self.client.msg.assert_called_once_with(target, expected)
 
             d.addCallback(check)
             return d
