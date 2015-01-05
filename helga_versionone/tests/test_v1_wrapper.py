@@ -5,7 +5,7 @@ from httplib2 import HttpLib2ErrorWithResponse
 from helga_versionone.v1_wrapper import property_required, HelgaOauthV1Server
 
 
-class TestPropertyRequered(TestCase):
+class TestPropertyRequired(TestCase):
     def test_good_object_works(self):
 
         class A(object):
