@@ -3,7 +3,7 @@
 --allow-unverified elementtree
 v1pysdk-unofficial==0.4.post1
 
-helga==1.6.2
+helga==1.6.3
 Twisted==13.1.0
 pymongo==2.5.2
 httplib2==0.9
