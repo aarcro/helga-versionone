@@ -1,26 +1,23 @@
 import re
 from functools import wraps, partial
 
-import smokesignal
 from oauth2client.client import OAuth2Credentials, OAuth2WebServerFlow, FlowExchangeError
 from twisted.internet import reactor, task
+from twisted.internet.defer import Deferred
 
 from helga import log, settings
 from helga.db import db
 from helga.plugins import command, match, random_ack, ResponseNotReady
-from helga.util.encodings import to_unicode
 
 
 USE_OAUTH = getattr(settings, 'VERSIONONE_OAUTH_ENABLED', False)
 if USE_OAUTH:
-    from helga_versionone.v1_wrapper import HelgaV1Meta as V1Meta
+    from helga_versionone.v1_wrapper import HelgaV1Meta as V1Meta  # pragma: no cover
 else:
     from v1pysdk import V1Meta
 
 logger = log.getLogger(__name__)
 VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG'])
-
-v1 = None
 
 
 class NotFound(Exception):
@@ -31,11 +28,13 @@ class QuitNow(Exception):
     pass
 
 
-def bad_args(client, channel, nick, failure):
+def bad_args(v1, client, channel, nick, failure):
     failure.trap(TypeError, AttributeError)
+    logger.debug('bag_args failure="{0}"'.format(failure))
     if v1 is None:
         client.msg(channel, u'{0}, you might want to try "!v1 oauth"'.format(nick))
     else:
+        logger.warning('Check docs because', exc_info=True)
         client.msg(channel, u'Umm... {0}, you might want to check the docs for that'.format(nick))
 
 
@@ -50,25 +49,25 @@ class deferred_response(object):
 
     def __call__(self, fn):
         @wraps(fn)
-        def wrapper(client, channel, nick, *args):
-            task.deferLater(
-                reactor, 0, fn, client, channel, nick, *args
+        def wrapper(v1, client, channel, nick, *args):
+            d = task.deferLater(
+                reactor, 0, fn, v1, client, channel, nick, *args
             ).addCallback(
                 partial(client.msg, locals()[self.target])
             ).addErrback(
-                partial(bad_args, client, channel, nick)
+                partial(bad_args, v1, client, channel, nick)
             ).addErrback(
                 partial(quit_now, client, channel, nick)
             )
             logger.debug('Delaying exection of {0}'.format(fn.__name__))
-            raise ResponseNotReady
+            return d
         return wrapper
 
 deferred_to_channel = deferred_response('channel')
 deferred_to_nick = deferred_response('nick')
 
 
-def commit_changes(*args):
+def commit_changes(v1, *args):
     """Respect the READONLY setting, return ack, or no perms message
        args is a list of 3-tuples, that will be passed to setattr iff we will write to V1
 
@@ -82,7 +81,6 @@ def commit_changes(*args):
         setattr(*call)
 
     v1.commit()
-    logger.debug('commited')
     return random_ack()
 
 
@@ -103,7 +101,7 @@ def _get_things(Klass, workitem, *args):
     return Klass.where(Parent=workitem.idref).select(*args)
 
 
-def get_workitem(number, *args):
+def get_workitem(v1, number, *args):
     """Get a workitem or die trying.
        args are passed to select to pre-populate fields
     """
@@ -113,7 +111,7 @@ def get_workitem(number, *args):
         raise QuitNow('I\'m sorry {{nick}}, item "{0}" not found'.format(number))
 
 
-def get_user(nick):
+def get_user(v1, nick):
     o_nick = nick
     try:
         nick = db.v1_user_map.find_one({'irc_nick': nick})['v1_nick']
@@ -161,7 +159,7 @@ def get_creds(nick):
 
 
 @deferred_to_channel
-def alias_command(client, channel, nick, *args):
+def alias_command(v1, client, channel, nick, *args):
     # Populate subcmd, and target to continue
     target = nick
     try:
@@ -206,9 +204,9 @@ def alias_command(client, channel, nick, *args):
 
 
 @deferred_to_nick
-def oauth_command(client, channel, nick, reply_code=None):
+def oauth_command(v1, client, channel, nick, reply_code=None):
     if not USE_OAUTH:
-        return "Oauth is not enabled"
+        return 'Oauth is not enabled'
 
     client = OAuth2WebServerFlow(
         settings.VERSIONONE_OAUTH_CLIENT_ID,
@@ -218,7 +216,6 @@ def oauth_command(client, channel, nick, reply_code=None):
         auth_uri=settings.VERSIONONE_URL + '/oauth.v1/auth',
         token_uri=settings.VERSIONONE_URL + '/oauth.v1/token',
     )
-
 
     if reply_code:
         q = {'irc_nick': nick}
@@ -267,7 +264,8 @@ def get_v1(nick):
 def _get_review(item):
     for field in settings.VERSIONONE_CR_FIELDS:
         try:
-            return getattr(item, field), field
+            val = getattr(item, field)
+            return '' if val is None else val, field
         except AttributeError:
             pass
     # No candidate fields matched, number might not have been a valid type
@@ -275,13 +273,13 @@ def _get_review(item):
 
 
 @deferred_to_channel
-def review_command(client, channel, nick, number, *args):
+def review_command(v1, client, channel, nick, number, *args):
     """(review | cr) <issue> [!]<text>
        With no text, show review link
        With '!' before text replace link, otherwise append
     """
 
-    w = get_workitem(number)
+    w = get_workitem(v1, number)
 
     try:
         link, field = _get_review(w)
@@ -290,7 +288,7 @@ def review_command(client, channel, nick, number, *args):
         return 'I\'m sorry {0}, item "{1}" doesn\'t support reviews'.format(nick, number)
 
     if args is ():
-        return '{0} Reviews: {1}'.format(number, link)
+        return '{0} Reviews: {1}'.format(number, link or '(None)')
 
     # else append CR
     change = False
@@ -304,13 +302,13 @@ def review_command(client, channel, nick, number, *args):
 
     if change:
         logger.debug('On {0} change {1} to "{2}"'.format(number, field, new_link))
-        return commit_changes((w, field, new_link),)
+        return commit_changes(v1, (w, field, new_link),)
 
     return 'Already got that one {0}'.format(nick)
 
 
 @deferred_to_channel
-def team_command(client, channel, nick, *args):
+def team_command(v1, client, channel, nick, *args):
     try:
         subcmd = args[0]
         args = args[1:]
@@ -351,19 +349,19 @@ def team_command(client, channel, nick, *args):
 
 
 @deferred_to_channel
-def take_command(client, channel, nick, number):
-    w = get_workitem(number, 'Owners')
-    user = get_user(nick)
+def take_command(v1, client, channel, nick, number):
+    w = get_workitem(v1, number, 'Owners')
+    user = get_user(v1, nick)
 
     if user in w.Owners:
         return 'Dude {0}, you already own it!'.format(nick)
     # Writing to Owners can only add values
-    return commit_changes((w, 'Owners', [user]))
+    return commit_changes(v1, (w, 'Owners', [user]))
 
 
-def _list_or_add_things(class_name, number, action=None, *args):
+def _list_or_add_things(v1, class_name, number, action=None, *args):
     Klass = getattr(v1, class_name)
-    workitem = get_workitem(number)
+    workitem = get_workitem(v1, number)
     if action is None:
         things = list(_get_things(Klass, workitem))
         things.sort(key=lambda t: t.Status.Order)
@@ -391,20 +389,20 @@ def _list_or_add_things(class_name, number, action=None, *args):
 
 
 @deferred_to_channel
-def tasks_command(client, channel, nick, number, action=None, *args):
-    return _list_or_add_things('Task', number, action, *args)
+def tasks_command(v1, client, channel, nick, number, action=None, *args):
+    return _list_or_add_things(v1, 'Task', number, action, *args)
 
 
 @deferred_to_channel
-def tests_command(client, channel, nick, number, action=None, *args):
-    return _list_or_add_things('Test', number, action, *args)
+def tests_command(v1, client, channel, nick, number, action=None, *args):
+    return _list_or_add_things(v1, 'Test', number, action, *args)
 
 
 @deferred_to_channel
-def user_command(client, channel, nick, *args):
+def user_command(v1, client, channel, nick, *args):
     # Recombine space'd args for full name lookup
     lookup = ' '.join(args) or nick
-    user = get_user(lookup)
+    user = get_user(v1, lookup)
     return '{0} [{1}] ({2})'.format(user.Name, user.Nickname, user.url)
 
 
@@ -422,7 +420,7 @@ def find_versionone_numbers(message):
     return tickets
 
 
-def versionone_command(client, channel, nick, message, cmd, args):
+def versionone_command(v1, client, channel, nick, message, cmd, args):
     """
     Command handler for the versionone plugin
     """
@@ -431,7 +429,6 @@ def versionone_command(client, channel, nick, message, cmd, args):
     except IndexError:
         return [
             'Usage for versionone (alias v1)',
-
             '!v1 alias [lookup | set | remove] - Lookup an alias, or set/remove your own',
             '!v1 oauth - Configures your oauth tokens',
             '!v1 review <issue> [!]<text> - Lookup, append, or set codereview field (alias: cr)',
@@ -440,22 +437,20 @@ def versionone_command(client, channel, nick, message, cmd, args):
             '!v1 team[s] [add | remove | list] <teamname> -- add, remove, list team(s) for the channel',
             '!v1 tests <ticket-id> (add <title>) - List tests for ticket, or add one',
             '!v1 user <nick> - Lookup V1 user for an ircnick',
-
         ]
     logger.debug('Calling VersionOne subcommand {0} with args {1}'.format(subcmd, args))
 
     try:
-        return COMMAND_MAP[subcmd](client, channel, nick, *args)
+        return COMMAND_MAP[subcmd](v1, client, channel, nick, *args)
     except KeyError:
         return u'Umm... {0}, Never heard of it?'.format(subcmd)
     except TypeError:
+        # can only be reached by a command that doesn't use the deffered_to_* wrapper
         return u'Umm... {0}, you might want to check the docs for {1}'.format(nick, subcmd)
-
-    return None
 
 
 @deferred_to_channel
-def versionone_full_descriptions(client, channel, nick, message, matches):
+def versionone_full_descriptions(v1, client, channel, nick, message, matches):
     """
     Meant to be run asynchronously because it uses the network
     """
@@ -486,11 +481,10 @@ def versionone(client, channel, nick, message, *args):
     Issue numbers are automatically detected.
     """
 
-    # TODO - globals suck, and some commands don't need v1... refactor
     try:
-        global v1
         v1 = get_v1(nick)
     except QuitNow:
+        # With OAUTH, get_creds can raise QuitNow
         logger.warning('No v1 connection for {0}'.format(nick))
         v1 = None
 
@@ -500,7 +494,11 @@ def versionone(client, channel, nick, message, *args):
     else:
         # args = [matches]
         fn = versionone_full_descriptions
-    return fn(client, channel, nick, message, *args)
+    res = fn(v1, client, channel, nick, message, *args)
+
+    if isinstance(res, Deferred):
+        raise ResponseNotReady
+    return res
 
 
 COMMAND_MAP = {

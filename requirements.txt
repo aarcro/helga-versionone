@@ -1,0 +1,10 @@
+# For the v1pysdk requirements
+--allow-external elementtree
+--allow-unverified elementtree
+v1pysdk-unofficial==0.4.post1
+
+helga==1.6.3
+Twisted==13.1.0
+pymongo==2.5.2
+httplib2==0.9
+oauth2client==1.4.5
