@@ -34,6 +34,7 @@ def bad_args(v1, client, channel, nick, failure):
     if v1 is None:
         client.msg(channel, u'{0}, you might want to try "!v1 oauth"'.format(nick))
     else:
+        logger.warning('Check docs because', exc_info=True)
         client.msg(channel, u'Umm... {0}, you might want to check the docs for that'.format(nick))
 
 
@@ -263,7 +264,8 @@ def get_v1(nick):
 def _get_review(item):
     for field in settings.VERSIONONE_CR_FIELDS:
         try:
-            return getattr(item, field), field
+            val = getattr(item, field)
+            return '' if val is None else val, field
         except AttributeError:
             pass
     # No candidate fields matched, number might not have been a valid type
@@ -286,7 +288,7 @@ def review_command(v1, client, channel, nick, number, *args):
         return 'I\'m sorry {0}, item "{1}" doesn\'t support reviews'.format(nick, number)
 
     if args is ():
-        return '{0} Reviews: {1}'.format(number, link)
+        return '{0} Reviews: {1}'.format(number, link or '(None)')
 
     # else append CR
     change = False
