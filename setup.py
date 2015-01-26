@@ -29,6 +29,7 @@ setup(name="helga-versionone",
       install_requires=[
           'v1pysdk-unofficial',
           'oauth2client',
+          'expiringdict',
       ],
       entry_points = dict(
           helga_plugins=[

@@ -6,6 +6,7 @@ import httplib2
 from urllib import urlencode
 
 
+from expiringdict import ExpiringDict
 from functools import wraps
 from urlparse import urlparse
 from v1pysdk.client import V1Server
@@ -46,7 +47,8 @@ class HelgaV1Meta(V1Meta):  # pragma: no cover
     def __init__(self, *args, **kw):
         # Coppied from V1Meta, but use our own Server class
         self.server = HelgaOauthV1Server(*args, **kw)
-        self.global_cache = {}
+        # ...And a cache that expires
+        self.global_cache = ExpiringDict(max_len=100, max_age_seconds=10)
         self.dirtylist = []
 
 
