@@ -18,6 +18,8 @@ This program relies upon the
 (albeit, an unofficial distribution of it), and that SDK relies upon elementree
 which is unavailable through verified/local PyPI sources.
 
+On py26 you'll need to pip install ordereddict
+
 
 Settings to Add
 ---------------
