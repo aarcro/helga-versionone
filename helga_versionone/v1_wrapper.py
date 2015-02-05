@@ -51,6 +51,12 @@ class HelgaV1Meta(V1Meta):  # pragma: no cover
         self.global_cache = ExpiringDict(max_len=100, max_age_seconds=10)
         self.dirtylist = []
 
+    def asset_class(self, asset_type_name):
+        Klass = super(HelgaV1Meta, self).asset_class(asset_type_name)
+        # Always use the current V1Meta instance, not the closed in one
+        Klass._v1_v1meta = self
+        return Klass
+
 
 class HelgaOauthV1Server(V1Server):
     "Accesses a V1 HTTP server as a client of the XML API protocol"
