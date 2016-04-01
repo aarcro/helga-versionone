@@ -3,7 +3,7 @@ import logging
 from copy import copy
 from functools import wraps
 from mock import MagicMock, patch
-from mock import _patch as Patch
+from mock.mock import _patch as Patch
 from pretend import stub
 from twisted.internet.defer import Deferred
 from twisted.trial import unittest

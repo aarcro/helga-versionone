@@ -1,5 +1,6 @@
 import re
 from functools import wraps, partial
+from collections import defaultdict
 
 from oauth2client.client import OAuth2Credentials, OAuth2WebServerFlow, FlowExchangeError
 from twisted.internet import reactor, task
@@ -17,7 +18,12 @@ else:
     from v1pysdk import V1Meta
 
 logger = log.getLogger(__name__)
-VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG'])
+VERSIONONE_PATTERNS = set(['B', 'D', 'TK', 'AT', 'FG', 'I', 'R', 'E'])
+# Non-workitems, need different endpoints
+SPECIAL_PATTERNS = {
+    'I': 'Issue',
+    'R': 'Request',
+}
 
 
 class NotFound(Exception):
@@ -454,18 +460,31 @@ def versionone_full_descriptions(v1, client, channel, nick, message, matches):
     """
     Meant to be run asynchronously because it uses the network
     """
+    specials = defaultdict(list)
 
-    descriptions = [
-        '[{number}] {name} ({url})'.format(**{
-            'name': s.Name,
-            'number': s.Number,
-            'url': s.url,
-        })
-        for s in v1.Workitem.filter(
-            # OR join on each number
-            '|'.join(["Number='{0}'".format(n) for n in matches])
-        ).select('Name', 'Number')
-    ]
+    for m in matches:
+        # Build lists of special lookup types
+        kind = m.split('-')[0]
+        if kind in SPECIAL_PATTERNS:
+            specials[SPECIAL_PATTERNS[kind]].append(m)
+        else:
+            # Or default to Workitem
+            specials['Workitem'].append(m)
+
+    descriptions = []
+    for kind, vals in specials.items():
+        descriptions += [
+            '[{number}] {name} ({url})'.format(**{
+                'name': s.Name,
+                'number': s.Number,
+                'url': s.url,
+            })
+            # Use the right Endpoint
+            for s in getattr(v1, kind).filter(
+                # OR join on each number
+                '|'.join(["Number='{0}'".format(n) for n in vals])
+            ).select('Name', 'Number')
+        ]
 
     return '\n'.join(descriptions)
 

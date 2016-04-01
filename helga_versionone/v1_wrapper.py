@@ -64,6 +64,8 @@ class HelgaOauthV1Server(V1Server):
 
     def __init__(self, address="localhost", instance="VersionOne.Web",
                  scheme="http", instance_url=None, credentials=None):
+        # How hacky is this?
+        self.logger = logger
         # Do not make super call, base implementation requires username/password
         if instance_url:
             self.instance_url = instance_url

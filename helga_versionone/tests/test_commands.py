@@ -173,6 +173,36 @@ class TestCommands(V1TestCase):
         d.addCallback(check)
         return d
 
+    def test_versionone_full_descriptions_special(self):
+        w = stub(
+            Name='Issue name',
+            Number='I-0010',
+            url='http://example.com',
+        )
+        self.v1.Issue.filter().select.return_value = [w]
+
+        d = helga_versionone.versionone_full_descriptions(
+            self.v1,
+            self.client,
+            self.channel,
+            self.nick,
+            'Something about I-0010',
+            ['I-0010'],
+        )
+
+        def check(res):
+            self.client.msg.assert_called_once_with(
+                self.channel,
+                '[{number}] {name} ({url})'.format(**{
+                    'name': w.Name,
+                    'number': w.Number,
+                    'url': w.url,
+                })
+            )
+
+        d.addCallback(check)
+        return d
+
 
 class TestUserCommand(V1TestCase):
     get_user = patch('helga_versionone.get_user', return_value=stub(
