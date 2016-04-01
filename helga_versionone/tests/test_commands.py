@@ -45,18 +45,34 @@ class TestCommands(V1TestCase):
         self.assertEquals(u, 'foo')
 
     @patch('helga_versionone.OAuth2Credentials')
-    def _test_get_creds(self, name, mock_OAuth2Credentials, oauth_works=True):
+    @patch('helga_versionone.USE_OAUTH')
+    def _test_get_creds(self, name, mock_USE_OAUTH, mock_OAuth2Credentials, oauth_works=False, token_works=True):
         # First call should fail, so nick re-writing happens
         # Second needs keys for the call to OAuth2Credentials
-        self.db.v1_oauth.find_one.side_effect = [None, MagicMock()]
+        auth_info = {}
+        mock_USE_OAUTH = False
+
+        if oauth_works:
+            mock_USE_OAUTH = True
+            auth_info['access_token'] = 'asdf'
+            auth_info['refresh_token'] = 'asdf'
+            auth_info['token_expiry'] = 'asdf'
+
+        if token_works:
+            auth_info['api_token'] = 'mahtoken'
+
+        self.db.v1_oauth.find_one.side_effect = [None, auth_info]
         if oauth_works:
             mock_OAuth2Credentials.return_value = 'foo'
         else:
             mock_OAuth2Credentials.side_effect = KeyError
 
-        if oauth_works:
+        if oauth_works and not token_works:
             c = helga_versionone.get_creds(name)
             self.assertEquals(c, 'foo')
+        elif token_works:
+            c = helga_versionone.get_creds(name)
+            self.assertEquals(c, 'mahtoken')
         else:
             self.assertRaises(helga_versionone.QuitNow, helga_versionone.get_creds, name)
 
@@ -64,13 +80,20 @@ class TestCommands(V1TestCase):
         self._test_get_creds('somename')
 
     def test_get_creds_underscore(self):
+        # No pipe - split underscore
         self._test_get_creds('somename_away')
+        self.db.v1_oauth.find_one.called_with({'irc_nick': 'somename'})
 
     def test_get_creds_pipe(self):
+        # With pipe - split pipe only
         self._test_get_creds('some_name|away')
+        self.db.v1_oauth.find_one.called_with({'irc_nick': 'some_name'})
 
-    def test_get_creds_fail_oauth(self):
-        self._test_get_creds('fhqwhgads', oauth_works=False)
+    def test_get_creds_oauth_works(self):
+        self._test_get_creds('fhqwhgads', oauth_works=True, token_works=False)
+
+    def test_get_creds_fail_all(self):
+        self._test_get_creds('fhqwhgads', oauth_works=False, token_works=False)
 
     def test_find_all(self):
         numbers = helga_versionone.find_versionone_numbers('Tell me about B-0010')
@@ -140,7 +163,7 @@ class TestCommands(V1TestCase):
         # For coverage, hit bad_args with v1 == None
         return self._test_command(
             'tasks B-0010 fhqwhgads',
-            u'{0}, you might want to try "!v1 oauth"'.format(self.nick),
+            u'{0}, you might want to try "!v1 oauth" or "!v1 token"'.format(self.nick),
         )
 
     def test_versionone_full_descriptions(self):
