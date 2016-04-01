@@ -474,7 +474,7 @@ def versionone_full_descriptions(v1, client, channel, nick, message, matches):
     descriptions = []
     for kind, vals in specials.items():
         descriptions += [
-            '[{number}] {name} ({url})'.format(**{
+            u'[{number}] {name} ({url})'.format(**{
                 'name': s.Name,
                 'number': s.Number,
                 'url': s.url,
