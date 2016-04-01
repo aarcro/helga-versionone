@@ -2,9 +2,10 @@
 
 import logging
 import httplib2
+import urllib2
 
 from urllib import urlencode
-
+from urllib2 import HTTPBasicAuthHandler, HTTPCookieProcessor
 
 from expiringdict import ExpiringDict
 from functools import wraps
@@ -62,10 +63,11 @@ class HelgaOauthV1Server(V1Server):
     "Accesses a V1 HTTP server as a client of the XML API protocol"
     API_PATH = "/rest-1.oauth.v1"
 
-    def __init__(self, address="localhost", instance="VersionOne.Web",
-                 scheme="http", instance_url=None, credentials=None):
+    def __init__(self, address="localhost", instance="VersionOne.Web", password='',
+                 scheme="http", instance_url=None, credentials=None, use_password_as_token=False):
         # How hacky is this?
-        self.logger = logger
+        self.logger = logging.getLogger(__name__ + '.v1_client')
+        self.logger.setLevel(logging.INFO)
         # Do not make super call, base implementation requires username/password
         if instance_url:
             self.instance_url = instance_url
@@ -84,8 +86,27 @@ class HelgaOauthV1Server(V1Server):
         if credentials is not None:
             self.set_credentials(credentials)
 
-    # No attempt is made to clear the cache when the creds change.
-    # We assume all users have the same read-access.
+        # Cheating to support tokens, since I know the internals
+        if use_password_as_token:
+            self.username = ''
+            self.password = password
+            self.use_password_as_token = use_password_as_token
+            self._install_opener()
+            # Become the parent class (for opener style get/post methods
+            self.__class__ = V1Server
+
+    def _install_opener(self):
+        base_url = self.build_url('')
+        password_manager = urllib2.HTTPPasswordMgrWithDefaultRealm()
+        password_manager.add_password(None, base_url, self.username, self.password)
+        # only use the first Auth_handler to avoid the busted NTLM handler
+        self.opener = urllib2.build_opener(HTTPBasicAuthHandler(password_manager))
+        if self.use_password_as_token:
+            self.opener.addheaders.append(('Authorization', 'Bearer ' + self.password))
+        self.opener.add_handler(HTTPCookieProcessor())
+        # No attempt is made to clear the cache when the creds change.
+        # We assume all users have the same read-access.
+
     def set_credentials(self, creds):
         # If there are memory leaks, they might come from here
         self.httpclient = httplib2.Http()
