@@ -305,6 +305,7 @@ def get_v1(nick):
 
         # Access Token is prefered, remove token to use OAUTH
         if isinstance(credentials, basestring):
+            logger.debug('Using V1 token auth')
             v1 = V1Meta(
                 instance_url=settings.VERSIONONE_URL,
                 password=credentials,
@@ -313,6 +314,7 @@ def get_v1(nick):
 
         # Use Oauth if provided
         elif credentials:
+            logger.debug('Trying V1 oauth')
             v1 = V1Meta(
                 instance_url=settings.VERSIONONE_URL,
                 credentials=credentials,
@@ -321,6 +323,7 @@ def get_v1(nick):
         # System user if no creds
         else:
             # Too much overhead, don't really need to re-init every call
+            logger.debug('Trying V1 service user auth')
             v1 = V1Meta(
                 instance_url=settings.VERSIONONE_URL,
                 username=settings.VERSIONONE_AUTH[0],
@@ -329,6 +332,9 @@ def get_v1(nick):
 
     except AttributeError:
         logger.error('VersionOne plugin misconfigured, check your settings')
+        raise
+    except Exception:
+        logger.exception('VersionOne failed to get client')
         raise
 
     return v1
