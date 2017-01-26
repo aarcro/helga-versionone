@@ -9,7 +9,7 @@ Installation
 Using pip
 ---------
 
-pip install --allow-external elementtree --allow-unverified elementtree helga-versionone
+`pip install --allow-external elementtree --allow-unverified elementtree helga-versionone`
 
 If you're wondering what the ``--allow-external elementtree``
 and ``--allow-unverified elementree`` lines are about:
@@ -17,8 +17,6 @@ This program relies upon the
 `Python SDK released by the VersionOne team <https://github.com/versionone/VersionOne.SDK.Python>`
 (albeit, an unofficial distribution of it), and that SDK relies upon elementree
 which is unavailable through verified/local PyPI sources.
-
-On py26 you'll need to pip install ordereddict
 
 
 Settings to Add
@@ -33,6 +31,7 @@ You'll need these in your settings.py
  * __VERSIONONE_OAUTH_CLIENT_ID__  From your Oauth client.
  * __VERSIONONE_OAUTH_CLIENT_SECRET__ From your Oauth client.
  * __VERSIONONE_OAUTH_ENABLED__ (Default: False) Set to True to enable Oauth.
+ * __VERSIONONE_SHARED_TOKEN__ Set token for read-only type operations, like listing story info
 
 Commands
 ========

@@ -297,11 +297,15 @@ def oauth_command(v1, client, channel, nick, reply_code=None):
         client.step1_get_authorize_url())
 
 
-def get_v1(nick):
-    """Get the v1 connection"""
+def get_v1(nick, use_shared_token=False):
+    """Get the v1 connection. If use_shared_token is true, use
+       what is given in settings.
+    """
 
     try:
-        credentials = get_creds(nick)
+        credentials = getattr(settings, 'VERSIONONE_SHARED_TOKEN', None)
+        if not use_shared_token or not credentials:
+            credentials = get_creds(nick)
 
         # Access Token is prefered, remove token to use OAUTH
         if isinstance(credentials, basestring):
@@ -574,14 +578,16 @@ def versionone(client, channel, nick, message, *args):
     Issue numbers are automatically detected.
     """
 
+    is_v1_command = len(args) == 2
     try:
-        v1 = get_v1(nick)
+        use_shared_token = not is_v1_command
+        v1 = get_v1(nick, use_shared_token)
     except QuitNow:
         # With OAUTH, get_creds can raise QuitNow
         logger.warning('No v1 connection for {0}'.format(nick))
         v1 = None
 
-    if len(args) == 2:
+    if is_v1_command:
         # args = [cmd, args]
         fn = versionone_command
     else:
